@@ -1,104 +1,67 @@
-# ShareIt - LAN/WiFi Folder & File Sync Tool
+# Socket
 
-**ShareIt** is a powerful, lightweight P2P (Peer-to-Peer) synchronization tool designed for local area networks. It allows users to seamlessly share and sync folders and files across devices on the same WiFi or LAN without needing an internet connection.
+Socket is a local-network messaging and transfer workspace built with Electron. It is designed for people on the same LAN or WiFi who want direct messages, file handoff, access approvals, and background sync without relying on cloud infrastructure.
 
-![ShareIt Banner](https://via.placeholder.com/1200x400.png?text=ShareIt+-+Fast+Local+P2P+Sync)
+## What Socket Does
 
----
+- Discovers peers automatically on the same local network
+- Opens direct-message threads with those peers
+- Sends files and folders from the active thread interface
+- Keeps accepted items syncing into a local master folder
+- Surfaces access requests, transfer state, and sync progress in dedicated workspaces
 
-## 🚀 Why ShareIt?
+## Current Product Shape
 
-- **No Internet Required**: Works entirely over your local network. Your data never leaves your premises.
-- **Blazing Fast**: Sync at the full speed of your LAN/WiFi (Gigabit ethernet, 5GHz WiFi).
-- **Privacy First**: Direct device-to-device communication. No cloud servers, no trackers.
-- **Set & Forget**: Once shared, folders sync automatically every 15 seconds whenever peers are online.
-- **Cross-Device Discovery**: Automatically finds other ShareIt users on your network.
+Socket is intentionally local-first:
 
----
+- Direct messages are peer-to-peer only in v1
+- Message history is stored locally on each device
+- UDP discovery is used for presence
+- Socket.IO is used for real-time messaging and transfer coordination
+- File sync continues to run in the background after access is accepted
 
-## 👥 Who Needs This?
+## App Structure
 
-- **Teams in Offices**: Instantly share design assets, documents, or code without slow cloud uploads.
-- **Students**: Share study materials and large project files in hostels or libraries.
-- **Home Users**: Sync photos and videos between your laptop, desktop, and home server.
-- **Developers**: Keep local project folders in sync across multiple workstations.
+- `renderer/` contains the desktop UI shell and interactions
+- `src/main.js` bootstraps the Electron app and IPC layer
+- `src/discovery.js` handles LAN presence and peer socket connections
+- `src/server.js` receives direct messages, access requests, and transfer events
+- `src/sync.js` performs background synchronization for accepted items
+- `src/store.js` persists local user, conversation, inbox, and transfer state
 
----
-
-## 🛠️ How It Works
-
-ShareIt uses a modern tech stack to ensure reliability and speed:
-
-1.  **Discovery**: Uses a custom peer discovery engine that broadcasts your presence on the local network. Peers find each other automatically.
-2.  **Sharing**: When you share a folder or file, ShareIt starts a local HTTP server. Only authorized peers can access the file list and download content.
-3.  **Watching**: Uses `chokidar` to monitor your shared folders for any changes (additions, modifications, deletions).
-4.  **Syncing**: The recipient's app periodically (every 15s) checks for changes and downloads only the updated or missing parts of a file.
-5.  **Storage**: By default, all synced files are stored in `C:\ShareIt\<PeerName>\<FolderName>`.
-
----
-
-## 📥 Getting Started
+## Development
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) (v18 or higher recommended)
-- [npm](https://www.npmjs.com/)
 
-### Installation
+- Node.js 18+
+- npm
 
-1.  **Clone the repository**:
-    ```bash
-    git clone https://github.com/tarunod/shareit.git
-    cd shareit
-    ```
+### Install dependencies
 
-2.  **Install dependencies**:
-    ```bash
-    npm install
-    ```
+```bash
+npm install
+```
 
-### Running the App
+### Run
 
-- **Development Mode**:
-  ```bash
-  npm run dev
-  ```
-- **Production Mode**:
-  ```bash
-  npm start
-  ```
+```bash
+npm run dev
+```
 
-### Building the Executable
+### Package
 
-To create a portable `.exe` for Windows:
 ```bash
 npm run build
 ```
-The installer will be generated in the `dist/` folder.
 
----
+Build and packaging are not run automatically in this repo. Run them manually when you want to verify desktop packaging.
 
-## 🤝 Contribution
+## Local Storage
 
-Contributions make the open-source community an amazing place! Any contributions you make are **greatly appreciated**.
+- Application data: `%USERPROFILE%\\.socket`
+- Synced files: `C:\\Socket`
 
-1.  **Fork** the Project
-2.  Create your **Feature Branch** (`git checkout -b feature/AmazingFeature`)
-3.  **Commit** your Changes (`git commit -m 'Add some AmazingFeature'`)
-4.  **Push** to the Branch (`git push origin feature/AmazingFeature`)
-5.  Open a **Pull Request**
+## Notes
 
----
-
-## 📜 License
-
-Distributed under the MIT License. See `LICENSE` for more information.
-
----
-
-## 📞 Contact
-
-**Project Creator**: [Tarun](https://github.com/tarunod)
-**Repository**: [https://github.com/tarunod/shareit](https://github.com/tarunod/shareit)
-
----
-*Developed with ❤️ for fast, private local sharing.*
+- The app can still interoperate with older discovery packets from the previous app name during the transition because it accepts both beacon formats.
+- Existing share/sync behavior is retained, but the UI now centers around conversations and operational workspaces instead of a dashboard.

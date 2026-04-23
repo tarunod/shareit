@@ -1,47 +1,37 @@
-# Contributing to ShareIt
+# Contributing to Socket
 
-First off, thanks for taking the time to contribute! 🎉
+Thanks for contributing.
 
-The following is a set of guidelines for contributing to ShareIt. These are mostly guidelines, not rules. Use your best judgment, and feel free to propose changes to this document in a pull request.
+These guidelines keep the local-network product direction consistent while the app evolves from its earlier sync-only form into a messaging and transfer workspace.
 
-## How Can I Contribute?
+## How to Contribute
 
-### Reporting Bugs
-- Use a clear and descriptive title for the issue to identify the problem.
-- Describe the exact steps which reproduce the problem in as many details as possible.
-- Explain which behavior you expected to see instead and why.
+### Report bugs
+- Use a specific title that describes the failure clearly.
+- Include reproduction steps, the network setup, and what behavior you expected.
+- Mention whether the issue affects discovery, messaging, access approval, transfers, or sync.
 
-### Suggesting Enhancements
-- Use a clear and descriptive title for the issue to identify the suggestion.
-- Provide a step-by-step description of the suggested enhancement in as many details as possible.
-- Explain why this enhancement would be useful to most ShareIt users.
+### Suggest enhancements
+- Explain the user problem first, not just the feature idea.
+- Describe how the change would improve the Socket workflow for local-network users.
+- Call out whether the proposal affects UX, protocol behavior, storage, or packaging.
 
-### Pull Requests
-- Fork the repo and create your branch from `main`.
-- If you've added code that should be tested, add tests.
-- If you've changed APIs, update the documentation.
-- Ensure the test suite passes.
-- Make sure your code lints.
+### Pull requests
+- Branch from `main`.
+- Update docs when public behavior or setup changes.
+- Add tests when practical for the area you changed.
+- Keep the UX-first product direction intact.
 
-## Styleguides
+## Development Style
 
-### Git Commit Messages
-- Use the present tense ("Add feature" not "Added feature")
-- Use the imperative mood ("Move cursor to..." not "Moves cursor to...")
-- Limit the first line to 72 characters or less
-- Reference issues and pull requests liberally after the first line
-
-### JavaScript Styleguide
-- Use 2 spaces for indentation.
-- Use `const` and `let` over `var`.
-- Use arrow functions where appropriate.
+- Use present-tense, imperative commit messages.
+- Prefer `const` and `let`.
+- Keep renderer interactions readable and organized around workspaces rather than scattered DOM fragments.
 
 ## Local Development
 
-1.  Clone the repo: `git clone https://github.com/tarunod/shareit.git`
-2.  Install dependencies: `npm install`
-3.  Run in dev mode: `npm run dev`
+1. Clone the repo.
+2. Run `npm install`.
+3. Run `npm run dev`.
 
----
-
-*Thank you for helping make ShareIt better!*
+Packaging is manual. If you need a desktop build, run it yourself when appropriate.

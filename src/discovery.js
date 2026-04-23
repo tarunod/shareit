@@ -1,7 +1,7 @@
 /**
- * discovery.js — UDP broadcast-based peer discovery on LAN
- * Each peer broadcasts its presence every 3 seconds and listens for others
+ * discovery.js - UDP broadcast-based peer discovery and Socket.IO peer transport.
  */
+const crypto = require('crypto');
 const dgram = require('dgram');
 const os = require('os');
 const { io: ioClient } = require('socket.io-client');
@@ -10,18 +10,18 @@ const logger = require('./logger');
 
 const BROADCAST_PORT = 34568;
 const BROADCAST_INTERVAL = 3000;
-const PEER_TIMEOUT = 10000; // Remove peer if not seen for 10s
+const PEER_TIMEOUT = 10000;
+const BEACON_TYPES = new Set(['socket-beacon', 'shareit-beacon']);
 
 class PeerDiscovery {
   constructor(mainWindow, serverPort) {
     this.mainWindow = mainWindow;
     this.serverPort = serverPort;
-    this.peers = new Map(); // id -> peer info
+    this.peers = new Map();
     this.socket = null;
     this.broadcastTimer = null;
     this.cleanupTimer = null;
-    this.pendingRequests = new Map(); // requestId -> { socket, request }
-    this.peerSockets = new Map(); // peerId -> socket.io client
+    this.peerSockets = new Map();
   }
 
   start() {
@@ -34,25 +34,30 @@ class PeerDiscovery {
     this.socket.on('message', (msg, rinfo) => {
       try {
         const data = JSON.parse(msg.toString());
-        if (data.type !== 'shareit-beacon') return;
+        if (!BEACON_TYPES.has(data.type)) return;
         const myInfo = store.getUserInfo();
-        if (data.id === myInfo.id) return; // Ignore self
+        if (data.id === myInfo.id) return;
 
-        const isNew = !this.peers.has(data.id);
+        const existing = this.peers.get(data.id);
         this.peers.set(data.id, {
+          ...existing,
           ...data,
           ip: rinfo.address,
           lastSeen: Date.now(),
         });
 
-        if (isNew) {
-          this.mainWindow.webContents.send('peers-updated', this.getPeers());
+        store.syncPeerConversation(this.peers.get(data.id));
+        this.emitPresenceUpdate();
+
+        if (!existing) {
           this.mainWindow.webContents.send('new-notification', {
             type: 'peer-joined',
-            message: `${data.name} joined the network`,
+            message: `${data.name} joined your local network`,
           });
         }
-      } catch (e) {}
+      } catch (e) {
+        logger.warn('Discovery', `Failed to process discovery packet: ${e.message}`);
+      }
     });
 
     this.socket.bind(BROADCAST_PORT, () => {
@@ -60,29 +65,33 @@ class PeerDiscovery {
       logger.info('Discovery', `Listening on UDP ${BROADCAST_PORT}`);
     });
 
-    // Broadcast presence
     this.broadcastTimer = setInterval(() => this.broadcast(), BROADCAST_INTERVAL);
     this.broadcast();
-
-    // Cleanup stale peers
     this.cleanupTimer = setInterval(() => this.cleanupPeers(), 5000);
+  }
+
+  emitPresenceUpdate() {
+    const peers = this.getPeers();
+    this.mainWindow.webContents.send('peers-updated', peers);
+    this.mainWindow.webContents.send('peer-presence-updated', peers);
+    this.mainWindow.webContents.send('conversation-updated', store.getConversations());
   }
 
   broadcast() {
     const userInfo = store.getUserInfo();
-    const localIP = this.getLocalIP();
     const payload = JSON.stringify({
-      type: 'shareit-beacon',
+      type: 'socket-beacon',
       id: userInfo.id,
       name: userInfo.name,
       hostname: userInfo.hostname,
-      ip: localIP, // Explicitly include IP
+      ip: this.getLocalIP(),
       port: this.serverPort,
       avatar: userInfo.avatar || null,
     });
     const buf = Buffer.from(payload);
-    const broadcastAddresses = this.getBroadcastAddresses();
-    for (const addr of broadcastAddresses) {
+    const addresses = this.getBroadcastAddresses();
+
+    for (const addr of addresses) {
       this.socket.send(buf, 0, buf.length, BROADCAST_PORT, addr, (err) => {
         if (err) logger.error('Discovery', `Broadcast error: ${err.message}`);
       });
@@ -93,9 +102,8 @@ class PeerDiscovery {
     const addresses = [];
     const interfaces = os.networkInterfaces();
     for (const iface of Object.values(interfaces)) {
-      for (const info of iface) {
+      for (const info of iface || []) {
         if (info.family === 'IPv4' && !info.internal) {
-          // Compute broadcast address
           const parts = info.address.split('.').map(Number);
           const maskParts = info.netmask.split('.').map(Number);
           const broadcast = parts.map((p, i) => (p | (~maskParts[i] & 255))).join('.');
@@ -116,65 +124,85 @@ class PeerDiscovery {
         changed = true;
       }
     }
-    if (changed) {
-      this.mainWindow.webContents.send('peers-updated', this.getPeers());
-    }
+    if (changed) this.emitPresenceUpdate();
   }
 
   getPeers() {
-    return Array.from(this.peers.values()).map(p => ({
-      id: p.id,
-      name: p.name,
-      hostname: p.hostname,
-      ip: p.ip,
-      port: p.port,
-      avatar: p.avatar,
-      lastSeen: p.lastSeen,
+    return Array.from(this.peers.values()).map((peer) => ({
+      id: peer.id,
+      name: peer.name,
+      hostname: peer.hostname,
+      ip: peer.ip,
+      port: peer.port,
+      avatar: peer.avatar,
+      lastSeen: peer.lastSeen,
     }));
   }
 
-  updateUserInfo(info) {
+  getPeerById(peerId) {
+    return this.peers.get(peerId) || null;
+  }
+
+  updateUserInfo() {
     this.broadcast();
   }
 
   getPeerSocket(peer) {
     if (this.peerSockets.has(peer.id)) return this.peerSockets.get(peer.id);
-    
+
     let host = peer.ip || '127.0.0.1';
     if (host.includes(':') && !host.startsWith('[')) host = `[${host}]`;
-    
-    logger.info('Discovery', `Connecting to peer socket at http://${host}:${peer.port}`);
+
     const socket = ioClient(`http://${host}:${peer.port}`, {
       reconnection: true,
       reconnectionAttempts: 5,
       timeout: 10000,
-      transports: ['websocket'], // Force websocket
+      transports: ['websocket'],
     });
-    const userInfo = store.getUserInfo();
+
     socket.on('connect', () => {
-      logger.info('Discovery', `Successfully connected to peer socket: ${host}`);
-      socket.emit('identify', userInfo);
+      socket.emit('identify', store.getUserInfo());
     });
+
     socket.on('connect_error', (err) => {
       logger.error('Discovery', `Failed to connect to peer ${host}: ${err.message}`);
     });
+
     this.peerSockets.set(peer.id, socket);
     return socket;
   }
 
+  sendDirectMessage(peerId, message) {
+    const peer = this.peers.get(peerId);
+    if (!peer) throw new Error('Peer is offline or unavailable');
+
+    const socket = this.getPeerSocket(peer);
+    const payload = {
+      id: message.id || crypto.randomUUID(),
+      sender: store.getUserInfo(),
+      recipientPeerId: peerId,
+      createdAt: message.createdAt || Date.now(),
+      type: message.type || 'text',
+      text: message.text || '',
+      attachments: message.attachments || [],
+      meta: message.meta || {},
+    };
+
+    const emit = () => socket.emit('direct-message', payload);
+    if (socket.connected) emit();
+    else socket.once('connect', emit);
+    return payload;
+  }
+
   sendAccessRequest(folder, peerIds) {
     const userInfo = store.getUserInfo();
-    logger.info('Discovery', `Sending access request for folder ${folder.name} to ${peerIds.length} peers`);
     for (const peerId of peerIds) {
       const peer = this.peers.get(peerId);
-      if (!peer) {
-        logger.warn('Discovery', `Cannot send request, peer not found: ${peerId}`);
-        continue;
-      }
-      const requestId = require('crypto').randomUUID();
+      if (!peer) continue;
+
       const socket = this.getPeerSocket(peer);
       const request = {
-        requestId,
+        requestId: crypto.randomUUID(),
         folderId: folder.id,
         folderName: folder.name,
         folderPath: folder.path,
@@ -183,19 +211,10 @@ class PeerDiscovery {
         ownerPort: this.serverPort,
         requestedAt: Date.now(),
       };
-      this.pendingRequests.set(requestId, { socket, request, peer });
-      
-      const sendReq = () => {
-        logger.info('Discovery', `Emitting access-request to peer ${peer.name} (${peer.ip})`);
-        socket.emit('access-request', request);
-      };
 
-      if (socket.connected) {
-        sendReq();
-      } else {
-        logger.info('Discovery', `Socket not connected yet, waiting for connect event to emit access-request`);
-        socket.once('connect', sendReq);
-      }
+      const emit = () => socket.emit('access-request', request);
+      if (socket.connected) emit();
+      else socket.once('connect', emit);
     }
   }
 
@@ -203,15 +222,14 @@ class PeerDiscovery {
     const userInfo = store.getUserInfo();
     let host = request.ownerHost || '127.0.0.1';
     if (host.includes(':') && !host.startsWith('[')) host = `[${host}]`;
-    
-    logger.info('Discovery', `Sending access response to ${host}:${request.ownerPort}`);
+
     const socket = ioClient(`http://${host}:${request.ownerPort}`, {
       reconnection: false,
       timeout: 10000,
       transports: ['websocket'],
     });
+
     socket.on('connect', () => {
-      logger.info('Discovery', `Connected to sender, emitting access-response`);
       socket.emit('access-response', {
         requestId: request.requestId,
         folderId: request.folderId,
@@ -221,16 +239,16 @@ class PeerDiscovery {
       });
       setTimeout(() => socket.disconnect(), 1000);
     });
+
     socket.on('connect_error', (err) => {
       logger.error('Discovery', `Failed to send access response to ${host}: ${err.message}`);
     });
   }
 
   notifySyncChange(folderId, changeInfo) {
-    // Notify all peers who have access to this folder
-    const sharedFolders = store.getSharedFolders();
-    const folder = sharedFolders.find(f => f.id === folderId);
+    const folder = store.getSharedFolders().find((entry) => entry.id === folderId);
     if (!folder) return;
+
     for (const peerId of folder.peers || []) {
       const peer = this.peers.get(peerId);
       if (!peer) continue;
@@ -242,7 +260,7 @@ class PeerDiscovery {
   getLocalIP() {
     const interfaces = os.networkInterfaces();
     for (const iface of Object.values(interfaces)) {
-      for (const info of iface) {
+      for (const info of iface || []) {
         if (info.family === 'IPv4' && !info.internal) {
           return info.address;
         }
@@ -255,7 +273,7 @@ class PeerDiscovery {
     if (this.broadcastTimer) clearInterval(this.broadcastTimer);
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     if (this.socket) this.socket.close();
-    for (const s of this.peerSockets.values()) s.disconnect();
+    for (const socket of this.peerSockets.values()) socket.disconnect();
   }
 }
 

@@ -1,17 +1,27 @@
 /**
- * server.js — Local Express + Socket.IO server for peer communication
- * Handles file transfer requests and sync events between peers
+ * server.js - Local Express + Socket.IO server for peer messaging and transfer coordination.
  */
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
+const { Server } = require('socket.io');
 const { store } = require('./store');
 const logger = require('./logger');
 
 const SYNC_PORT_START = 34567;
+
+function emitConversationState(mainWindow) {
+  mainWindow.webContents.send('conversation-updated', store.getConversations());
+}
+
+function emitInboxState(mainWindow) {
+  mainWindow.webContents.send('inbox-updated', store.getInboxItems());
+}
+
+function emitTransferState(mainWindow) {
+  mainWindow.webContents.send('transfer-updated', store.getTransfers());
+}
 
 function createServer(mainWindow) {
   return new Promise((resolve, reject) => {
@@ -23,89 +33,113 @@ function createServer(mainWindow) {
       cors: { origin: '*' },
     });
 
-    let port = SYNC_PORT_START;
-
-    const tryListen = (p) => {
-      httpServer.listen(p, '0.0.0.0', () => {
-        logger.info('Server', `Successfully listening on port ${p}`);
-        resolve({ app, io, httpServer, port: p });
+    function tryListen(port) {
+      httpServer.listen(port, '0.0.0.0', () => {
+        logger.info('Server', `Listening on port ${port}`);
+        resolve({ app, io, httpServer, port });
       });
 
       httpServer.on('error', (err) => {
         if (err.code === 'EADDRINUSE') {
-          logger.warn('Server', `Port ${p} is in use, trying ${p + 1}...`);
-          tryListen(p + 1);
+          tryListen(port + 1);
         } else {
-          logger.error('Server', `Server error: ${err.message}`);
           reject(err);
         }
       });
-    };
+    }
 
-    // REST endpoints for file chunks
     app.get('/health', (req, res) => {
       res.json({ status: 'ok', ...store.getUserInfo() });
     });
 
-    // Serve file chunks for sync
     app.get('/file/:folderId/*', (req, res) => {
       const { folderId } = req.params;
       const relativePath = req.params[0];
-      const sharedFolders = store.getSharedFolders();
-      const folder = sharedFolders.find(f => f.id === folderId);
+      const folder = store.getSharedFolders().find((entry) => entry.id === folderId);
       if (!folder) return res.status(404).json({ error: 'Folder not found' });
-      
-      let filePath;
-      if (fs.existsSync(folder.path) && !fs.statSync(folder.path).isDirectory()) {
-        filePath = folder.path;
-      } else {
+
+      let filePath = folder.path;
+      if (fs.existsSync(folder.path) && fs.statSync(folder.path).isDirectory()) {
         filePath = path.join(folder.path, relativePath);
       }
-      
+
       if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
-      logger.info('Server', `Serving file chunk: ${relativePath} for folder ${folder.name}`);
       res.sendFile(filePath);
     });
 
-    // List files in a shared folder
     app.get('/list/:folderId', (req, res) => {
-      const { folderId } = req.params;
-      const sharedFolders = store.getSharedFolders();
-      const folder = sharedFolders.find(f => f.id === folderId);
+      const folder = store.getSharedFolders().find((entry) => entry.id === req.params.folderId);
       if (!folder) return res.status(404).json({ error: 'Folder not found' });
+
       try {
         const files = getAllFiles(folder.path, folder.path);
-        logger.info('Server', `Listed ${files.length} files for folder ${folder.name}`);
         res.json({ files, folderName: folder.name });
-      } catch (e) {
-        logger.error('Server', `Failed to list files for folder ${folder.name}: ${e.message}`);
-        res.status(500).json({ error: e.message });
+      } catch (err) {
+        logger.error('Server', `Failed to list files: ${err.message}`);
+        res.status(500).json({ error: err.message });
       }
     });
 
-    // Socket.IO events for real-time peer communication
     io.on('connection', (socket) => {
-      logger.info('Server', `Peer connected: ${socket.id} (${socket.handshake.address})`);
-
       socket.on('identify', (peerInfo) => {
-        logger.info('Server', `Peer identified as ${peerInfo.name}`);
         socket.peerInfo = peerInfo;
       });
 
-      socket.on('access-request', (request) => {
-        let ip = socket.handshake.address;
-        if (ip.includes('::ffff:')) ip = ip.replace('::ffff:', '');
-        logger.info('Server', `Received access request from ${ip} for folder ${request.folderName}`);
-        mainWindow.webContents.send('access-request', {
-          ...request,
-          ownerHost: ip,
-          socketId: socket.id,
+      socket.on('direct-message', (message) => {
+        const peer = {
+          ...(message.sender || {}),
+          ip: socket.handshake.address?.replace('::ffff:', '') || '',
+        };
+        const stored = store.addIncomingMessage({
+          peer,
+          type: message.type || 'text',
+          text: message.text || '',
+          attachments: message.attachments || [],
+          meta: message.meta || {},
+          timestamp: message.createdAt,
         });
+        emitConversationState(mainWindow);
+        mainWindow.webContents.send('message-received', stored);
+      });
+
+      socket.on('access-request', (request) => {
+        let ip = socket.handshake.address || '';
+        if (ip.includes('::ffff:')) ip = ip.replace('::ffff:', '');
+
+        const peer = { ...(request.ownerInfo || {}), ip };
+        store.syncPeerConversation(peer);
+        store.addInboxItem({
+          id: request.requestId,
+          type: 'access-request',
+          peerId: request.ownerInfo?.id,
+          peerName: request.ownerInfo?.name,
+          folderId: request.folderId,
+          folderName: request.folderName,
+          resourceType: request.type,
+          request,
+        });
+        store.addSystemMessage({
+          peer,
+          text: `${request.ownerInfo?.name || 'A peer'} wants to share ${request.folderName} with you.`,
+          meta: { kind: 'access-request', requestId: request.requestId, folderId: request.folderId },
+          unread: true,
+          timestamp: request.requestedAt,
+        });
+        emitInboxState(mainWindow);
+        emitConversationState(mainWindow);
       });
 
       socket.on('access-response', (response) => {
-        logger.info('Server', `Received access response for ${response.folderName}: accepted=${response.accepted}`);
-        mainWindow.webContents.send('access-response', response);
+        const peer = response.ownerInfo || { id: 'unknown', name: 'Unknown peer' };
+        store.addSystemMessage({
+          peer,
+          text: response.accepted
+            ? `${peer.name} accepted your share request for ${response.folderName}.`
+            : `${peer.name} declined your share request for ${response.folderName}.`,
+          meta: { kind: 'access-response', folderId: response.folderId, requestId: response.requestId },
+          unread: true,
+        });
+        emitConversationState(mainWindow);
         if (response.accepted) {
           mainWindow.webContents.send('access-accepted', response);
         } else {
@@ -113,17 +147,21 @@ function createServer(mainWindow) {
         }
       });
 
-      socket.on('sync-notify', (data) => {
-        logger.info('Server', `Received sync-notify for folder ${data.folderName}: ${data.file} ${data.event}`);
-        mainWindow.webContents.send('sync-notify', data);
-      });
-
-      socket.on('disconnect', () => {
-        logger.info('Server', `Peer disconnected: ${socket.id}`);
+      socket.on('sync-notify', (payload) => {
+        store.upsertTransfer({
+          id: `sync:${payload.folderId}`,
+          kind: 'sync',
+          folderId: payload.folderId,
+          folderName: payload.folderName,
+          status: payload.event || 'updated',
+          file: payload.file,
+          peerName: socket.peerInfo?.name || 'Unknown peer',
+        });
+        emitTransferState(mainWindow);
       });
     });
 
-    tryListen(port);
+    tryListen(SYNC_PORT_START);
   });
 }
 
@@ -138,23 +176,15 @@ function getAllFiles(baseDir, currentDir) {
     }];
   }
 
-  const results = [];
-  const items = fs.readdirSync(currentDir);
-  for (const item of items) {
+  const files = [];
+  for (const item of fs.readdirSync(currentDir)) {
     const fullPath = path.join(currentDir, item);
     const itemStat = fs.statSync(fullPath);
     const relPath = path.relative(baseDir, fullPath).replace(/\\/g, '/');
-    if (itemStat.isDirectory()) {
-      results.push(...getAllFiles(baseDir, fullPath));
-    } else {
-      results.push({
-        path: relPath,
-        size: itemStat.size,
-        mtime: itemStat.mtimeMs,
-      });
-    }
+    if (itemStat.isDirectory()) files.push(...getAllFiles(baseDir, fullPath));
+    else files.push({ path: relPath, size: itemStat.size, mtime: itemStat.mtimeMs });
   }
-  return results;
+  return files;
 }
 
 module.exports = { createServer };

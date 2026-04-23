@@ -1,16 +1,19 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('shareit', {
-  // User info
+const api = {
   getUserInfo: () => ipcRenderer.invoke('get-user-info'),
   setUserInfo: (info) => ipcRenderer.invoke('set-user-info', info),
-
-  // Peers
   getPeers: () => ipcRenderer.invoke('get-peers'),
-
-  // Folders
   getSharedFolders: () => ipcRenderer.invoke('get-shared-folders'),
   getReceivedFolders: () => ipcRenderer.invoke('get-received-folders'),
+  getSyncProgress: () => ipcRenderer.invoke('get-sync-progress'),
+  getConversations: () => ipcRenderer.invoke('get-conversations'),
+  getMessages: (conversationId) => ipcRenderer.invoke('get-messages', conversationId),
+  getInboxItems: () => ipcRenderer.invoke('get-inbox-items'),
+  getTransfers: () => ipcRenderer.invoke('get-transfers'),
+  sendMessage: (payload) => ipcRenderer.invoke('send-message', payload),
+  sendFiles: (payload) => ipcRenderer.invoke('send-files', payload),
+  markConversationRead: (conversationId) => ipcRenderer.invoke('mark-conversation-read', conversationId),
   pickFile: () => ipcRenderer.invoke('pick-file'),
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
   shareFolder: (data) => ipcRenderer.invoke('share-folder', data),
@@ -18,45 +21,36 @@ contextBridge.exposeInMainWorld('shareit', {
   openSyncedFolder: (id) => ipcRenderer.invoke('open-synced-folder', id),
   getMasterFolder: () => ipcRenderer.invoke('get-master-folder'),
   stopSharing: (id) => ipcRenderer.invoke('stop-sharing', id),
-
-  // Access requests
-  acceptAccess: (id) => ipcRenderer.invoke('accept-access', id),
-  rejectAccess: (id) => ipcRenderer.invoke('reject-access', id),
-
-  // Sync
-  getSyncProgress: () => ipcRenderer.invoke('get-sync-progress'),
+  acceptAccess: (request) => ipcRenderer.invoke('accept-access', request),
+  rejectAccess: (request) => ipcRenderer.invoke('reject-access', request),
   forceSync: () => ipcRenderer.invoke('force-sync'),
-
-  // Update
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   quitAndInstall: () => ipcRenderer.invoke('quit-and-install'),
+  minimize: () => ipcRenderer.send('window-minimize'),
+  maximize: () => ipcRenderer.send('window-maximize'),
+  close: () => ipcRenderer.send('window-close'),
   onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_, info) => cb(info)),
   onUpdateDownloaded: (cb) => ipcRenderer.on('update-downloaded', (_, info) => cb(info)),
   onUpdateError: (cb) => ipcRenderer.on('update-error', (_, err) => cb(err)),
   onUpdateProgress: (cb) => ipcRenderer.on('update-progress', (_, progress) => cb(progress)),
-
-  // Window controls
-  minimize: () => ipcRenderer.send('window-minimize'),
-  maximize: () => ipcRenderer.send('window-maximize'),
-  close: () => ipcRenderer.send('window-close'),
-
-  // Events from main
   on: (channel, callback) => {
     const validChannels = [
       'peers-updated',
-      'access-request',
+      'peer-presence-updated',
+      'message-received',
+      'conversation-updated',
+      'transfer-updated',
+      'inbox-updated',
       'access-accepted',
       'access-rejected',
       'sync-progress',
-      'sync-complete',
-      'sync-error',
       'new-notification',
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.on(channel, (_, data) => callback(data));
     }
   },
-  off: (channel, callback) => {
-    ipcRenderer.removeListener(channel, callback);
-  },
-});
+};
+
+contextBridge.exposeInMainWorld('socketApp', api);
+contextBridge.exposeInMainWorld('shareit', api);

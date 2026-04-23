@@ -33,3 +33,9 @@ Thumbs.db
 
 # Electron
 .electron-builder-debug
+
+
+# Extras
+
+design.md 
+task_*.md

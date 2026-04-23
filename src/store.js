@@ -1,37 +1,150 @@
 /**
- * store.js — Simple JSON-based persistent store
+ * store.js - Simple JSON-backed store for local Socket state.
  */
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 
-const DATA_DIR = path.join(os.homedir(), '.shareit');
-const DATA_FILE = path.join(DATA_DIR, 'data.json');
+const SOCKET_DIR = path.join(os.homedir(), '.socket');
+const SOCKET_FILE = path.join(SOCKET_DIR, 'data.json');
+const LEGACY_DIR = path.join(os.homedir(), '.shareit');
+const LEGACY_FILE = path.join(LEGACY_DIR, 'data.json');
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(SOCKET_DIR)) fs.mkdirSync(SOCKET_DIR, { recursive: true });
 
-let data = {
-  userInfo: null,
-  sharedFolders: [],
-  receivedFolders: [],
-};
+function getInitialData() {
+  return {
+    userInfo: null,
+    sharedFolders: [],
+    receivedFolders: [],
+    conversations: {},
+    messages: {},
+    inbox: [],
+    transfers: [],
+  };
+}
 
-if (fs.existsSync(DATA_FILE)) {
+let data = getInitialData();
+const sourceFile = fs.existsSync(SOCKET_FILE) ? SOCKET_FILE : LEGACY_FILE;
+
+if (fs.existsSync(sourceFile)) {
   try {
-    data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  } catch (e) {}
+    data = { ...getInitialData(), ...JSON.parse(fs.readFileSync(sourceFile, 'utf8')) };
+  } catch (e) {
+    data = getInitialData();
+  }
 }
 
 function save() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  fs.writeFileSync(SOCKET_FILE, JSON.stringify(data, null, 2));
+}
+
+function getConversationId(peerId) {
+  return `peer:${peerId}`;
+}
+
+function now() {
+  return Date.now();
+}
+
+function ensureConversation(peer) {
+  const peerId = peer?.id || 'unknown';
+  const conversationId = getConversationId(peerId);
+  const existing = data.conversations[conversationId];
+
+  if (!existing) {
+    data.conversations[conversationId] = {
+      id: conversationId,
+      peerId,
+      peerName: peer?.name || 'Unknown peer',
+      peerHostname: peer?.hostname || '',
+      peerIp: peer?.ip || '',
+      unreadCount: 0,
+      lastMessageAt: 0,
+      lastMessagePreview: '',
+      createdAt: now(),
+      updatedAt: now(),
+    };
+  } else {
+    data.conversations[conversationId] = {
+      ...existing,
+      peerName: peer?.name || existing.peerName,
+      peerHostname: peer?.hostname || existing.peerHostname,
+      peerIp: peer?.ip || existing.peerIp,
+      updatedAt: now(),
+    };
+  }
+
+  if (!data.messages[conversationId]) {
+    data.messages[conversationId] = [];
+  }
+
+  return data.conversations[conversationId];
+}
+
+function getMessagePreview(message) {
+  if (message.type === 'attachment') {
+    return message.attachments?.length ? `Sent ${message.attachments.length} attachment${message.attachments.length > 1 ? 's' : ''}` : 'Sent an attachment';
+  }
+  if (message.type === 'system' || message.type === 'transfer') {
+    return message.text || 'System update';
+  }
+  return message.text || 'New message';
+}
+
+function addMessageInternal({ peer, direction, type, text, attachments, meta, timestamp, unread }) {
+  const conversation = ensureConversation(peer);
+  const message = {
+    id: crypto.randomUUID(),
+    conversationId: conversation.id,
+    peerId: conversation.peerId,
+    direction,
+    type: type || 'text',
+    text: text || '',
+    attachments: attachments || [],
+    meta: meta || {},
+    createdAt: timestamp || now(),
+  };
+
+  data.messages[conversation.id].push(message);
+  data.conversations[conversation.id] = {
+    ...conversation,
+    lastMessageAt: message.createdAt,
+    lastMessagePreview: getMessagePreview(message),
+    unreadCount: unread ? (conversation.unreadCount || 0) + 1 : (conversation.unreadCount || 0),
+    updatedAt: now(),
+  };
+  save();
+  return message;
+}
+
+function upsertTransfer(transfer) {
+  const existingIndex = data.transfers.findIndex((item) => item.id === transfer.id);
+  const payload = {
+    createdAt: now(),
+    updatedAt: now(),
+    ...transfer,
+  };
+
+  if (existingIndex === -1) {
+    data.transfers.unshift(payload);
+  } else {
+    data.transfers[existingIndex] = {
+      ...data.transfers[existingIndex],
+      ...payload,
+      updatedAt: now(),
+    };
+  }
+  save();
+  return data.transfers.find((item) => item.id === transfer.id);
 }
 
 const store = {
   getUserInfo() {
     if (!data.userInfo) {
-      // Generate default user info
       data.userInfo = {
-        id: require('crypto').randomUUID(),
+        id: crypto.randomUUID(),
         name: os.userInfo().username,
         hostname: os.hostname(),
         avatar: null,
@@ -52,12 +165,12 @@ const store = {
 
   addSharedFolder(folder) {
     data.sharedFolders = data.sharedFolders || [];
-    data.sharedFolders.push(folder);
+    data.sharedFolders.unshift(folder);
     save();
   },
 
   removeSharedFolder(folderId) {
-    data.sharedFolders = (data.sharedFolders || []).filter(f => f.id !== folderId);
+    data.sharedFolders = (data.sharedFolders || []).filter((folder) => folder.id !== folderId);
     save();
   },
 
@@ -67,24 +180,123 @@ const store = {
 
   addReceivedFolder(folder) {
     data.receivedFolders = data.receivedFolders || [];
-    // Avoid duplicates
-    if (!data.receivedFolders.find(f => f.id === folder.id)) {
-      data.receivedFolders.push(folder);
-      save();
+    const existing = data.receivedFolders.find((item) => item.id === folder.id);
+    if (existing) {
+      Object.assign(existing, folder);
+    } else {
+      data.receivedFolders.unshift(folder);
     }
+    save();
   },
 
   updateReceivedFolder(folderId, updates) {
-    data.receivedFolders = (data.receivedFolders || []).map(f =>
-      f.id === folderId ? { ...f, ...updates } : f
+    data.receivedFolders = (data.receivedFolders || []).map((folder) =>
+      folder.id === folderId ? { ...folder, ...updates } : folder
     );
     save();
   },
 
   removeReceivedFolder(folderId) {
-    data.receivedFolders = (data.receivedFolders || []).filter(f => f.id !== folderId);
+    data.receivedFolders = (data.receivedFolders || []).filter((folder) => folder.id !== folderId);
     save();
   },
+
+  ensureConversation,
+
+  syncPeerConversation(peer) {
+    const conversation = ensureConversation(peer);
+    save();
+    return conversation;
+  },
+
+  getConversations() {
+    return Object.values(data.conversations || {}).sort((a, b) => {
+      return (b.lastMessageAt || b.updatedAt || 0) - (a.lastMessageAt || a.updatedAt || 0);
+    });
+  },
+
+  getMessages(conversationId) {
+    return (data.messages && data.messages[conversationId]) || [];
+  },
+
+  addOutgoingMessage({ peer, type, text, attachments, meta }) {
+    return addMessageInternal({
+      peer,
+      direction: 'outgoing',
+      type,
+      text,
+      attachments,
+      meta,
+      unread: false,
+    });
+  },
+
+  addIncomingMessage({ peer, type, text, attachments, meta, timestamp }) {
+    return addMessageInternal({
+      peer,
+      direction: 'incoming',
+      type,
+      text,
+      attachments,
+      meta,
+      timestamp,
+      unread: true,
+    });
+  },
+
+  addSystemMessage({ peer, text, meta, unread = false, timestamp }) {
+    return addMessageInternal({
+      peer,
+      direction: 'system',
+      type: meta?.transferId ? 'transfer' : 'system',
+      text,
+      attachments: [],
+      meta,
+      timestamp,
+      unread,
+    });
+  },
+
+  markConversationRead(conversationId) {
+    if (!data.conversations[conversationId]) return false;
+    data.conversations[conversationId].unreadCount = 0;
+    data.conversations[conversationId].updatedAt = now();
+    save();
+    return true;
+  },
+
+  getInboxItems() {
+    return (data.inbox || []).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  },
+
+  addInboxItem(item) {
+    const payload = {
+      id: item.id || crypto.randomUUID(),
+      status: item.status || 'pending',
+      createdAt: item.createdAt || now(),
+      updatedAt: now(),
+      ...item,
+    };
+    data.inbox = data.inbox || [];
+    const existingIndex = data.inbox.findIndex((entry) => entry.id === payload.id);
+    if (existingIndex === -1) data.inbox.unshift(payload);
+    else data.inbox[existingIndex] = { ...data.inbox[existingIndex], ...payload, updatedAt: now() };
+    save();
+    return payload;
+  },
+
+  updateInboxItem(id, updates) {
+    data.inbox = (data.inbox || []).map((item) =>
+      item.id === id ? { ...item, ...updates, updatedAt: now() } : item
+    );
+    save();
+  },
+
+  getTransfers() {
+    return (data.transfers || []).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  },
+
+  upsertTransfer,
 };
 
-module.exports = { store };
+module.exports = { store, getConversationId };

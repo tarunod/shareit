@@ -107,6 +107,15 @@ class SyncManager {
       logger.info('Sync', `Starting sync for folder ${folder.name} from ${baseUrl}`);
       const fileList = await this.fetchJSON(`${baseUrl}/list/${folder.id}`);
       const files = fileList.files || [];
+      store.upsertTransfer({
+        id: `sync:${folder.id}`,
+        kind: 'sync',
+        folderId: folder.id,
+        folderName: folder.name,
+        peerName: folder.ownerInfo?.name || 'Unknown peer',
+        status: 'syncing',
+        percent: 0,
+      });
 
       this.progress.set(folder.id, {
         folderId: folder.id,
@@ -145,6 +154,16 @@ class SyncManager {
           done,
           percent: Math.round((done / files.length) * 100),
         });
+        store.upsertTransfer({
+          id: `sync:${folder.id}`,
+          kind: 'sync',
+          folderId: folder.id,
+          folderName: folder.name,
+          peerName: folder.ownerInfo?.name || 'Unknown peer',
+          status: 'syncing',
+          percent: Math.round((done / files.length) * 100),
+          currentFile: file.path,
+        });
         this.emitProgress(folder.id);
       }
 
@@ -156,6 +175,16 @@ class SyncManager {
       });
       this.emitProgress(folder.id);
       store.updateReceivedFolder(folder.id, { status: 'synced', lastSync: Date.now() });
+      store.upsertTransfer({
+        id: `sync:${folder.id}`,
+        kind: 'sync',
+        folderId: folder.id,
+        folderName: folder.name,
+        peerName: folder.ownerInfo?.name || 'Unknown peer',
+        status: 'synced',
+        percent: 100,
+        lastSync: Date.now(),
+      });
       logger.info('Sync', `Completed sync for folder ${folder.name}`);
 
     } catch (err) {
@@ -163,6 +192,16 @@ class SyncManager {
       this.progress.set(folder.id, {
         ...(this.progress.get(folder.id) || { folderId: folder.id, folderName: folder.name }),
         status: 'error',
+        error: err.message,
+      });
+      store.upsertTransfer({
+        id: `sync:${folder.id}`,
+        kind: 'sync',
+        folderId: folder.id,
+        folderName: folder.name,
+        peerName: folder.ownerInfo?.name || 'Unknown peer',
+        status: 'error',
+        percent: 0,
         error: err.message,
       });
       this.emitProgress(folder.id);
@@ -211,6 +250,7 @@ class SyncManager {
     const prog = this.progress.get(folderId);
     if (prog) {
       this.mainWindow.webContents.send('sync-progress', prog);
+      this.mainWindow.webContents.send('transfer-updated', store.getTransfers());
     }
   }
 

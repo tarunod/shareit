@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const LOG_FILE = 'C:\\ShareIt\\shareit.log';
+const LOG_FILE = 'C:\\Socket\\socket.log';
 
 function log(level, context, message) {
   try {
