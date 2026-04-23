@@ -1,0 +1,54 @@
+{
+  "name": "shareit",
+  "version": "1.0.0",
+  "description": "LAN/WiFi Folder Sync Tool",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder build --win --publish never",
+    "dist": "electron-builder build --win --publish always"
+  },
+  "build": {
+    "appId": "com.shareit.app",
+    "productName": "ShareIt",
+    "win": {
+      "target": "nsis",
+      "publish": [
+        "github"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "tarunod",
+      "repo": "shareit"
+    }
+  },
+  "keywords": [
+    "lan",
+    "sync",
+    "folder",
+    "sharing"
+  ],
+  "author": "ShareIt",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^26.8.1",
+    "electron-packager": "^17.1.2"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "electron-updater": "^6.8.3",
+    "express": "^4.19.2",
+    "fs-extra": "^11.2.0",
+    "socket.io": "^4.7.5",
+    "socket.io-client": "^4.7.5",
+    "uuid": "^10.0.0"
+  }
+}
