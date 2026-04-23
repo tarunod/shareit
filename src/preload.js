@@ -20,6 +20,9 @@ const api = {
   openMasterFolder: () => ipcRenderer.invoke('open-master-folder'),
   openSyncedFolder: (id) => ipcRenderer.invoke('open-synced-folder', id),
   getMasterFolder: () => ipcRenderer.invoke('get-master-folder'),
+  pickMasterFolder: () => ipcRenderer.invoke('pick-master-folder'),
+  setMasterFolder: (folderPath) => ipcRenderer.invoke('set-master-folder', folderPath),
+  getWindowState: () => ipcRenderer.invoke('get-window-state'),
   stopSharing: (id) => ipcRenderer.invoke('stop-sharing', id),
   acceptAccess: (request) => ipcRenderer.invoke('accept-access', request),
   rejectAccess: (request) => ipcRenderer.invoke('reject-access', request),
@@ -45,6 +48,7 @@ const api = {
       'access-rejected',
       'sync-progress',
       'new-notification',
+      'window-state-changed',
     ];
     if (validChannels.includes(channel)) {
       ipcRenderer.on(channel, (_, data) => callback(data));

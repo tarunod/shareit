@@ -16,6 +16,9 @@ if (!fs.existsSync(SOCKET_DIR)) fs.mkdirSync(SOCKET_DIR, { recursive: true });
 function getInitialData() {
   return {
     userInfo: null,
+    settings: {
+      masterFolder: 'C:\\Socket',
+    },
     sharedFolders: [],
     receivedFolders: [],
     conversations: {},
@@ -159,6 +162,27 @@ const store = {
     save();
   },
 
+  getSettings() {
+    if (!data.settings) {
+      data.settings = { masterFolder: 'C:\\Socket' };
+      save();
+    }
+    return data.settings;
+  },
+
+  getMasterFolder() {
+    return store.getSettings().masterFolder || 'C:\\Socket';
+  },
+
+  setMasterFolder(masterFolder) {
+    data.settings = {
+      ...store.getSettings(),
+      masterFolder,
+    };
+    save();
+    return data.settings.masterFolder;
+  },
+
   getSharedFolders() {
     return data.sharedFolders || [];
   },
@@ -209,11 +233,17 @@ const store = {
     return conversation;
   },
 
-  getConversations() {
-    return Object.values(data.conversations || {}).sort((a, b) => {
-      return (b.lastMessageAt || b.updatedAt || 0) - (a.lastMessageAt || a.updatedAt || 0);
-    });
-  },
+    getConversations() {
+      return Object.values(data.conversations || {}).sort((a, b) => {
+        const messageDelta = (b.lastMessageAt || 0) - (a.lastMessageAt || 0);
+        if (messageDelta !== 0) return messageDelta;
+
+        const createdDelta = (b.createdAt || 0) - (a.createdAt || 0);
+        if (createdDelta !== 0) return createdDelta;
+
+        return (a.peerName || '').localeCompare(b.peerName || '');
+      });
+    },
 
   getMessages(conversationId) {
     return (data.messages && data.messages[conversationId]) || [];
@@ -257,13 +287,12 @@ const store = {
     });
   },
 
-  markConversationRead(conversationId) {
-    if (!data.conversations[conversationId]) return false;
-    data.conversations[conversationId].unreadCount = 0;
-    data.conversations[conversationId].updatedAt = now();
-    save();
-    return true;
-  },
+    markConversationRead(conversationId) {
+      if (!data.conversations[conversationId]) return false;
+      data.conversations[conversationId].unreadCount = 0;
+      save();
+      return true;
+    },
 
   getInboxItems() {
     return (data.inbox || []).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));

@@ -18,10 +18,19 @@ let server;
 let devReloader;
 let devReloadRestarting = false;
 
-const MASTER_FOLDER = 'C:\\Socket';
+const APP_ICON_PATH = path.join(__dirname, '../img/socket_icon.png');
 
-if (!fs.existsSync(MASTER_FOLDER)) {
-  fs.mkdirSync(MASTER_FOLDER, { recursive: true });
+function getAppIcon() {
+  if (!fs.existsSync(APP_ICON_PATH)) return nativeImage.createEmpty();
+  return nativeImage.createFromPath(APP_ICON_PATH);
+}
+
+function getMasterFolder() {
+  const folder = store.getMasterFolder();
+  if (!fs.existsSync(folder)) {
+    fs.mkdirSync(folder, { recursive: true });
+  }
+  return folder;
 }
 
 function emitConversations() {
@@ -34,6 +43,13 @@ function emitTransfers() {
 
 function emitInbox() {
   mainWindow.webContents.send('inbox-updated', store.getInboxItems());
+}
+
+function emitWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('window-state-changed', {
+    isMaximized: mainWindow.isMaximized(),
+  });
 }
 
 function createWindow() {
@@ -49,11 +65,15 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
     },
+    icon: APP_ICON_PATH,
     show: false,
   });
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.on('maximize', emitWindowState);
+  mainWindow.on('unmaximize', emitWindowState);
+  mainWindow.on('restore', emitWindowState);
   mainWindow.on('close', (event) => {
     event.preventDefault();
     mainWindow.hide();
@@ -61,12 +81,12 @@ function createWindow() {
 }
 
 function createTray() {
-  tray = new Tray(nativeImage.createEmpty());
+  tray = new Tray(getAppIcon());
   tray.setToolTip('Socket - Local network messaging and transfers');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open Socket', click: () => mainWindow.show() },
     { type: 'separator' },
-    { label: 'Open Master Folder', click: () => shell.openPath(MASTER_FOLDER) },
+    { label: 'Open Master Folder', click: () => shell.openPath(getMasterFolder()) },
     { type: 'separator' },
     { label: 'Quit', click: () => { app.exit(0); } },
   ]));
@@ -198,6 +218,14 @@ function registerHandlers() {
     return result.canceled ? null : result.filePaths[0];
   });
 
+  ipcMain.handle('pick-master-folder', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory', 'createDirectory'],
+      title: 'Select master folder',
+    });
+    return result.canceled ? null : result.filePaths[0];
+  });
+
   ipcMain.handle('share-folder', async (_, { folderPath, peerIds }) => {
     const item = createSharedItem(folderPath, peerIds);
     emitTransfers();
@@ -223,7 +251,7 @@ function registerHandlers() {
       id: request.folderId,
       name: request.folderName,
       type: request.type || 'folder',
-      syncPath: path.join(MASTER_FOLDER, request.ownerInfo?.name || 'Unknown', request.folderName),
+      syncPath: path.join(getMasterFolder(), request.ownerInfo?.name || 'Unknown', request.folderName),
       ownerInfo: request.ownerInfo,
       ownerHost: request.ownerHost,
       ownerPort: request.ownerPort,
@@ -268,13 +296,24 @@ function registerHandlers() {
     return true;
   });
 
-  ipcMain.handle('open-master-folder', () => shell.openPath(MASTER_FOLDER));
-  ipcMain.handle('get-master-folder', () => MASTER_FOLDER);
+  ipcMain.handle('open-master-folder', () => shell.openPath(getMasterFolder()));
+  ipcMain.handle('get-master-folder', () => getMasterFolder());
+  ipcMain.handle('set-master-folder', (_, folderPath) => {
+    if (!folderPath) return getMasterFolder();
+    fs.mkdirSync(folderPath, { recursive: true });
+    store.setMasterFolder(folderPath);
+    if (syncManager) syncManager.setMasterFolder(folderPath);
+    return folderPath;
+  });
+  ipcMain.handle('get-window-state', () => ({
+    isMaximized: mainWindow ? mainWindow.isMaximized() : false,
+  }));
 
   ipcMain.on('window-minimize', () => mainWindow.minimize());
   ipcMain.on('window-maximize', () => {
     if (mainWindow.isMaximized()) mainWindow.unmaximize();
     else mainWindow.maximize();
+    emitWindowState();
   });
   ipcMain.on('window-close', () => mainWindow.hide());
 }
@@ -360,7 +399,7 @@ if (!gotTheLock) {
     server = await createServer(mainWindow);
     peerDiscovery = new PeerDiscovery(mainWindow, server.port);
     peerDiscovery.start();
-    syncManager = new SyncManager(mainWindow, MASTER_FOLDER, peerDiscovery);
+    syncManager = new SyncManager(mainWindow, getMasterFolder(), peerDiscovery);
     syncManager.start();
     emitConversations();
     emitInbox();

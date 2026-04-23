@@ -11,20 +11,21 @@ const state = {
   receivedFolders: [],
   syncProgress: {},
   masterFolder: 'C:\\Socket',
-  activeWorkspace: 'chats',
+  activeWorkspace: 'home',
   activeConversationId: null,
   queuedAttachments: [],
   bootstrapError: null,
+  notificationsOpen: false,
+  windowState: { isMaximized: false },
 };
 
 const rail = document.getElementById('left-rail');
 const threadRail = document.getElementById('thread-rail');
 const stage = document.getElementById('main-stage');
 const toastStack = document.getElementById('toast-stack');
-
-function initials(name) {
-  return (name || '?').slice(0, 1).toUpperCase();
-}
+const notificationAnchor = document.getElementById('notification-anchor');
+const notificationButton = document.getElementById('btn-notifications');
+const maximizeButton = document.getElementById('btn-maximize');
 
 function escapeHtml(value) {
   return String(value || '')
@@ -35,9 +36,18 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-function formatTime(value) {
+function initials(name) {
+  return (name || '?').slice(0, 1).toUpperCase();
+}
+
+function formatTime(value, withDay = false) {
   if (!value) return '';
-  return new Intl.DateTimeFormat('en-IN', {
+  return new Intl.DateTimeFormat('en-IN', withDay ? {
+    day: 'numeric',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+  } : {
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(value));
@@ -45,23 +55,48 @@ function formatTime(value) {
 
 function icon(name) {
   const icons = {
-    chats: '<path d="M5 7a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3h-4l-4 3v-3H8a3 3 0 0 1-3-3Z"/>',
-    transfers: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 19h14"/>',
-    shared: '<path d="M15 8a3 3 0 1 0-2.83-4"/><path d="M9 16a3 3 0 1 0 2.83 4"/><path d="m14 6-4 12"/>',
-    inbox: '<path d="M4 6h16v10H15l-3 3-3-3H4Z"/>',
-    settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.7.09 1.4.66 1.4 1.5s-.7 1.41-1.4 1.5A1.7 1.7 0 0 0 19.4 15Z"/>',
-    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
+    home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/>',
+    chats: '<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/>',
+    transfers: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>',
+    shared: '<path d="M8 12a3 3 0 1 0 0-6"/><path d="M16 18a3 3 0 1 0 0-6"/><path d="m10.5 8.5 3 7"/>',
+    inbox: '<path d="M4 5h16v10H15l-3 3-3-3H4Z"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06A2 2 0 1 1 4.5 16.9l.06-.06A1.65 1.65 0 0 0 4.9 15a1.65 1.65 0 0 0-1.51-1H3.3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.9 9a1.65 1.65 0 0 0-.33-1.82L4.5 7.1A2 2 0 1 1 7.33 4.3l.06.06A1.65 1.65 0 0 0 9.2 4a1.65 1.65 0 0 0 1-1.51V2.4a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06A2 2 0 1 1 19.9 7.1l-.06.06A1.65 1.65 0 0 0 19.5 9a1.65 1.65 0 0 0 1.51 1h.09a2 2 0 1 1 0 4H21a1.65 1.65 0 0 0-1.6 1Z"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
     file: '<path d="M8 3h6l4 4v14H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M14 3v5h5"/>',
     attach: '<path d="M16.5 6.5 9 14a3 3 0 1 0 4.24 4.24l7.07-7.07a5 5 0 0 0-7.07-7.07L5.46 11.88a7 7 0 1 0 9.9 9.9L21 16.14"/>',
     sync: '<path d="M3 12a9 9 0 0 1 15-6"/><path d="M21 4v5h-5"/><path d="M21 12a9 9 0 0 1-15 6"/><path d="M3 20v-5h5"/>',
     send: '<path d="M3 20 21 12 3 4l2 7 10 1-10 1Z"/>',
-    online: '<circle cx="12" cy="12" r="4"/>',
-    search: '<circle cx="11" cy="11" r="6"/><path d="m20 20-3.5-3.5"/>',
+    bell: '<path d="M15 17H5l1.4-1.4A2 2 0 0 0 7 14.2V10a5 5 0 1 1 10 0v4.2a2 2 0 0 0 .6 1.4L19 17h-4"/><path d="M9 17a3 3 0 0 0 6 0"/>',
+    minimize: '<path d="M5 12h14"/>',
+    maximize: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
+    restore: '<path d="M9 9h10v10"/><path d="M15 15H5V5h10"/>',
     close: '<path d="m6 6 12 12"/><path d="M18 6 6 18"/>',
     accept: '<path d="M5 13 9 17 19 7"/>',
+    chevronRight: '<path d="m9 18 6-6-6-6"/>',
+    chevronDown: '<path d="m6 9 6 6 6-6"/>',
     open: '<path d="M14 4h6v6"/><path d="M10 14 20 4"/><path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    dot: '<circle cx="12" cy="12" r="3"/>',
   };
-  return `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.chats}</svg>`;
+
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.dot}</svg>`;
+}
+
+function setWindowIcons() {
+  notificationButton.querySelector('.icon-host').innerHTML = icon('bell');
+  maximizeButton.querySelector('.outline').innerHTML = '';
+  maximizeButton.querySelector('.outline').classList.toggle('restore-shape', state.windowState.isMaximized);
+}
+
+function toast(message, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = message;
+  toastStack.appendChild(el);
+  setTimeout(() => {
+    el.classList.add('leave');
+    setTimeout(() => el.remove(), 220);
+  }, 2200);
 }
 
 function getPeerConversationEntries() {
@@ -87,6 +122,55 @@ function getActiveConversation() {
   return getPeerConversationEntries().find((conversation) => conversation.id === state.activeConversationId) || null;
 }
 
+function getRecentEvents() {
+  const events = [];
+
+  for (const item of state.inbox) {
+    events.push({
+      id: `inbox:${item.id}`,
+      kind: 'request',
+      title: item.folderName,
+      subtitle: item.peerName || 'Incoming request',
+      at: item.updatedAt || item.createdAt,
+      status: item.status,
+      requestId: item.id,
+      workspace: 'inbox',
+    });
+  }
+
+  for (const transfer of state.transfers) {
+    events.push({
+      id: `transfer:${transfer.id}`,
+      kind: transfer.resourceType === 'folder' ? 'folder' : 'transfer',
+      title: transfer.folderName || transfer.file || 'Transfer',
+      subtitle: transfer.peerName || transfer.status || 'Transfer update',
+      at: transfer.updatedAt || transfer.createdAt,
+      status: transfer.status,
+      workspace: 'transfers',
+      transferId: transfer.id,
+    });
+  }
+
+  for (const shared of state.sharedFolders) {
+    events.push({
+      id: `shared:${shared.id}`,
+      kind: shared.type === 'folder' ? 'folder' : 'file',
+      title: shared.name,
+      subtitle: `Shared with ${(shared.peers || []).length} peer${(shared.peers || []).length === 1 ? '' : 's'}`,
+      at: shared.sharedAt,
+      status: 'shared',
+      workspace: 'shared',
+      sharedId: shared.id,
+    });
+  }
+
+  return events.sort((a, b) => (b.at || 0) - (a.at || 0));
+}
+
+function getNotificationItems() {
+  return getRecentEvents().slice(0, 8);
+}
+
 async function loadConversationMessages() {
   if (!state.activeConversationId) {
     state.messages = [];
@@ -103,7 +187,7 @@ async function hydrate() {
   }
 
   state.currentUser = await api.getUserInfo();
-  const [peers, conversations, inbox, transfers, sharedFolders, receivedFolders, syncProgress, masterFolder] = await Promise.all([
+  const [peers, conversations, inbox, transfers, sharedFolders, receivedFolders, syncProgress, masterFolder, windowState] = await Promise.all([
     api.getPeers(),
     api.getConversations(),
     api.getInboxItems(),
@@ -112,6 +196,7 @@ async function hydrate() {
     api.getReceivedFolders(),
     api.getSyncProgress(),
     api.getMasterFolder(),
+    api.getWindowState(),
   ]);
 
   state.peers = peers;
@@ -122,6 +207,7 @@ async function hydrate() {
   state.receivedFolders = receivedFolders;
   state.syncProgress = syncProgress;
   state.masterFolder = masterFolder;
+  state.windowState = windowState || { isMaximized: false };
 
   const firstConversation = getPeerConversationEntries()[0];
   if (!state.activeConversationId && firstConversation) {
@@ -132,33 +218,57 @@ async function hydrate() {
   renderAll();
 }
 
+function renderNotificationPopup() {
+  const items = getNotificationItems();
+  notificationAnchor.innerHTML = state.notificationsOpen ? `
+    <section class="notification-popover">
+      <header class="popover-header">
+        <strong>Notifications</strong>
+        <span>${items.length}</span>
+      </header>
+      <div class="popover-list">
+        ${items.length ? items.map((item) => `
+          <button class="popover-item" type="button" data-open-workspace="${item.workspace}" data-open-conversation="${item.workspace === 'home' ? '' : ''}" data-event-id="${item.id}">
+            <span class="popover-item-icon">${icon(item.kind === 'request' ? 'inbox' : item.kind)}</span>
+            <span class="popover-item-copy">
+              <strong>${escapeHtml(item.title)}</strong>
+              <small>${escapeHtml(item.subtitle)}</small>
+            </span>
+            <span class="popover-item-time">${formatTime(item.at)}</span>
+          </button>
+        `).join('') : `<div class="popover-empty">No notifications</div>`}
+      </div>
+    </section>
+  ` : '';
+}
+
 function renderLeftRail() {
   if (state.bootstrapError) {
     rail.innerHTML = `<div class="rail-error">Renderer Error</div>`;
     return;
   }
 
-  const pendingInbox = state.inbox.filter((item) => item.status === 'pending').length;
   const navItems = [
-    ['chats', 'Chats', 'chats', 0],
+    ['home', 'Home', 'home', 0],
+    ['chats', 'Chats', 'chats', state.conversations.filter((item) => item.unreadCount).length],
     ['transfers', 'Transfers', 'transfers', state.transfers.filter((item) => item.status === 'syncing').length],
     ['shared', 'Shared', 'shared', state.sharedFolders.length],
-    ['inbox', 'Inbox', 'inbox', pendingInbox],
+    ['inbox', 'Inbox', 'inbox', state.inbox.filter((item) => item.status === 'pending').length],
     ['settings', 'Settings', 'settings', 0],
   ];
 
   rail.innerHTML = `
     <div class="rail-top">
-      <div class="rail-brand">
-        <div class="brand-mark-compact">S</div>
-        <div class="brand-meta">
+      <button class="rail-brand-button" data-workspace="home" type="button">
+        <img class="rail-brand-icon" src="../img/socket_icon.png" alt="Socket" />
+        <span class="rail-brand-copy">
           <strong>Socket</strong>
-          <span>${state.peers.length} peers</span>
-        </div>
-      </div>
-      <div class="rail-nav">
+          <small>Local network</small>
+        </span>
+      </button>
+      <div class="rail-nav rail-nav-expanded">
         ${navItems.map(([id, label, iconName, count]) => `
-          <button class="rail-icon-btn ${state.activeWorkspace === id ? 'active' : ''}" data-workspace="${id}" type="button" title="${label}">
+          <button class="rail-nav-btn ${state.activeWorkspace === id ? 'active' : ''}" data-workspace="${id}" type="button" title="${label}">
             <span class="icon-wrap">${icon(iconName)}</span>
             <span class="rail-label">${label}</span>
             ${count ? `<span class="rail-count">${count}</span>` : ''}
@@ -167,11 +277,21 @@ function renderLeftRail() {
       </div>
     </div>
     <div class="rail-bottom">
-      <button class="rail-utility" data-action="manual-sync" type="button" title="Sync now">${icon('sync')}</button>
-      <button class="rail-utility" data-action="open-master" type="button" title="Open folder">${icon('folder')}</button>
-      <div class="rail-profile" title="${escapeHtml(state.currentUser?.name || '')}">
-        <div class="profile-avatar">${initials(state.currentUser?.name)}</div>
-      </div>
+      <button class="rail-utility rail-utility-wide" data-action="manual-sync" type="button" title="Sync now">
+        <span class="icon-wrap">${icon('sync')}</span>
+        <span class="rail-label">Sync now</span>
+      </button>
+      <button class="rail-utility rail-utility-wide" data-action="open-master" type="button" title="Open master folder">
+        <span class="icon-wrap">${icon('folder')}</span>
+        <span class="rail-label">Open folder</span>
+      </button>
+      <button class="rail-account ${state.activeWorkspace === 'settings' ? 'active' : ''}" data-workspace="settings" type="button" title="Open settings">
+        <span class="icon-wrap">${icon('settings')}</span>
+        <span class="rail-account-copy">
+          <strong>${escapeHtml(state.currentUser?.name || 'Socket')}</strong>
+          <small>Settings</small>
+        </span>
+      </button>
     </div>
   `;
 }
@@ -184,39 +304,84 @@ function renderThreadRail() {
 
   const conversations = getPeerConversationEntries();
   const onlinePeerIds = new Set(state.peers.map((peer) => peer.id));
-  const headingMap = {
-    chats: 'Messages',
-    transfers: 'Transfers',
-    shared: 'Shared',
-    inbox: 'Inbox',
-    settings: 'Settings',
+
+  if (state.activeWorkspace === 'home') {
+    threadRail.innerHTML = `
+      <div class="thread-header compact">
+        <strong>Recent</strong>
+      </div>
+      <div class="thread-list">
+        ${getRecentEvents().slice(0, 8).map((event) => `
+          <button class="thread-card summary-card" type="button" data-open-workspace="${event.workspace}">
+            <div class="thread-card-avatar icon-avatar">${icon(event.kind === 'request' ? 'inbox' : event.kind)}</div>
+            <div class="thread-card-copy">
+              <div class="thread-card-top">
+                <strong>${escapeHtml(event.title)}</strong>
+              </div>
+              <p>${escapeHtml(event.subtitle)}</p>
+            </div>
+          </button>
+        `).join('') || `<div class="thread-empty compact-empty"><p>No recent activity</p></div>`}
+      </div>
+    `;
+    return;
+  }
+
+  if (state.activeWorkspace === 'chats') {
+    threadRail.innerHTML = `
+      <div class="thread-header compact">
+        <strong>Direct Messages</strong>
+      </div>
+      <div class="thread-list">
+        ${conversations.length ? conversations.map((conversation) => `
+          <button class="thread-card ${state.activeConversationId === conversation.id ? 'active' : ''}" data-conversation="${conversation.id}" type="button">
+            <div class="thread-card-avatar">${initials(conversation.peerName)}</div>
+            <div class="thread-card-copy">
+              <div class="thread-card-top">
+                <strong>${escapeHtml(conversation.peerName)}</strong>
+                <span class="presence-dot ${onlinePeerIds.has(conversation.peerId) ? 'online' : ''}"></span>
+              </div>
+              <p>${escapeHtml(conversation.lastMessagePreview || conversation.peerIp || 'Start chat')}</p>
+            </div>
+            ${conversation.unreadCount ? `<span class="thread-unread">${conversation.unreadCount}</span>` : ''}
+          </button>
+        `).join('') : `<div class="thread-empty compact-empty"><p>No conversations</p></div>`}
+      </div>
+    `;
+    return;
+  }
+
+  const workspaceSummaries = {
+    transfers: ['Transfers', state.transfers.length || Object.keys(state.syncProgress).length, 'Recent sync and share activity'],
+    shared: ['Shared', state.sharedFolders.length, 'Items you are sharing'],
+    inbox: ['Inbox', state.inbox.filter((item) => item.status === 'pending').length, 'Pending requests'],
+    settings: ['Settings', 0, 'Profile and device info'],
   };
 
+  const [title, count, subtitle] = workspaceSummaries[state.activeWorkspace] || ['Workspace', 0, ''];
   threadRail.innerHTML = `
     <div class="thread-header compact">
-      <strong>${headingMap[state.activeWorkspace]}</strong>
-      <button class="thread-search" type="button" title="Search">${icon('search')}</button>
+      <strong>${title}</strong>
     </div>
-    <div class="thread-list">
-      ${conversations.length === 0 ? `
-        <div class="thread-empty compact-empty">
-          <div class="empty-icon">${icon('online')}</div>
-          <p>No peers online</p>
-        </div>
-      ` : conversations.map((conversation) => `
-        <button class="thread-card ${state.activeConversationId === conversation.id ? 'active' : ''}" data-conversation="${conversation.id}" type="button">
-          <div class="thread-card-avatar">${initials(conversation.peerName)}</div>
-          <div class="thread-card-copy">
-            <div class="thread-card-top">
-              <strong>${escapeHtml(conversation.peerName)}</strong>
-              <span class="presence-dot ${onlinePeerIds.has(conversation.peerId) ? 'online' : ''}"></span>
-            </div>
-            <p>${escapeHtml(conversation.lastMessagePreview || conversation.peerIp || 'Start chat')}</p>
-          </div>
-          ${conversation.unreadCount ? `<span class="thread-unread">${conversation.unreadCount}</span>` : ''}
-        </button>
-      `).join('')}
+    <div class="thread-list workspace-summary-list">
+      <div class="workspace-summary-card">
+        <strong>${count}</strong>
+        <p>${escapeHtml(subtitle)}</p>
+      </div>
     </div>
+  `;
+}
+
+function renderActivityRow(event) {
+  return `
+    <button class="activity-row" type="button" data-open-workspace="${event.workspace}">
+      <span class="activity-icon">${icon(event.kind === 'request' ? 'inbox' : event.kind)}</span>
+      <span class="activity-copy">
+        <strong>${escapeHtml(event.title)}</strong>
+        <small>${escapeHtml(event.subtitle)}</small>
+      </span>
+      <span class="activity-time">${formatTime(event.at, true)}</span>
+    </button>
   `;
 }
 
@@ -227,7 +392,7 @@ function renderMessageRow(message, conversation) {
       <div class="message-bubble">
         <div class="message-meta">
           <strong>${escapeHtml(sender)}</strong>
-          <span>${formatTime(message.createdAt)}</span>
+          <span>${formatTime(message.createdAt, true)}</span>
         </div>
         ${message.text ? `<p>${escapeHtml(message.text)}</p>` : ''}
         ${(message.attachments || []).length ? `
@@ -245,43 +410,69 @@ function renderMessageRow(message, conversation) {
   `;
 }
 
-function renderUtilityCard(conversation, online) {
+function renderHomeWorkspace() {
+  const recentConversations = getPeerConversationEntries().slice(0, 4);
+  const recentEvents = getRecentEvents().slice(0, 10);
+  const pendingRequests = state.inbox.filter((item) => item.status === 'pending').slice(0, 3);
+
   return `
-    <aside class="utility-panel">
-      <div class="utility-card">
-        <div class="utility-head">
-          <div class="presence-avatar small">${initials(conversation.peerName)}</div>
+    <section class="workspace-shell home-shell">
+      <header class="workspace-header">
+        <div class="workspace-title single-line">
           <div>
-            <strong>${escapeHtml(conversation.peerName)}</strong>
-            <span>${online ? 'Online' : 'Offline'}</span>
+            <strong>Home</strong>
+            <span>${state.peers.length} peers on your network</span>
           </div>
         </div>
-        <div class="utility-stats">
-          <div><span>${icon('online')}</span><small>${escapeHtml(conversation.peerIp || 'No IP')}</small></div>
-          <div><span>${icon('sync')}</span><small>${state.queuedAttachments.length} queued</small></div>
-        </div>
-      </div>
-      <div class="utility-card">
-        <div class="utility-actions">
-          <button class="icon-action-btn" data-action="attach-file" type="button" title="Attach files">
-            ${icon('attach')}
-            <span>Files</span>
-          </button>
-          <button class="icon-action-btn" data-action="attach-folder" type="button" title="Attach folder">
-            ${icon('folder')}
-            <span>Folder</span>
-          </button>
-        </div>
-        <div class="queued-list compact-list">
-          ${state.queuedAttachments.length ? state.queuedAttachments.map((item) => `
-            <div class="queued-item">
-              <span>${icon(item.kind === 'folder' ? 'folder' : 'file')}</span>
-              <strong>${escapeHtml(item.name)}</strong>
-            </div>
-          `).join('') : '<div class="muted icon-line"><span>' + icon('attach') + '</span><small>No queued items</small></div>'}
-        </div>
-      </div>
-    </aside>
+      </header>
+      <section class="home-grid">
+        <article class="surface-card">
+          <div class="surface-head">
+            <strong>Recent messages</strong>
+          </div>
+          <div class="surface-list">
+            ${recentConversations.length ? recentConversations.map((conversation) => `
+              <button class="surface-row" type="button" data-open-chat="${conversation.id}">
+                <span class="surface-avatar">${initials(conversation.peerName)}</span>
+                <span class="surface-copy">
+                  <strong>${escapeHtml(conversation.peerName)}</strong>
+                  <small>${escapeHtml(conversation.lastMessagePreview || 'No messages yet')}</small>
+                </span>
+                <span class="surface-time">${formatTime(conversation.lastMessageAt)}</span>
+              </button>
+            `).join('') : `<div class="empty-line">No conversations yet</div>`}
+          </div>
+        </article>
+        <article class="surface-card">
+          <div class="surface-head">
+            <strong>Pending requests</strong>
+          </div>
+          <div class="surface-list">
+            ${pendingRequests.length ? pendingRequests.map((item) => `
+              <div class="surface-row static-row">
+                <span class="surface-avatar icon-avatar">${icon('inbox')}</span>
+                <span class="surface-copy">
+                  <strong>${escapeHtml(item.folderName)}</strong>
+                  <small>${escapeHtml(item.peerName || 'Incoming request')}</small>
+                </span>
+                <span class="surface-actions">
+                  <button class="inline-action success" data-accept-request="${item.id}" type="button" title="Accept">${icon('accept')}</button>
+                  <button class="inline-action" data-reject-request="${item.id}" type="button" title="Reject">${icon('close')}</button>
+                </span>
+              </div>
+            `).join('') : `<div class="empty-line">No pending requests</div>`}
+          </div>
+        </article>
+        <article class="surface-card wide-card">
+          <div class="surface-head">
+            <strong>Activity</strong>
+          </div>
+          <div class="activity-list">
+            ${recentEvents.length ? recentEvents.map(renderActivityRow).join('') : `<div class="empty-line">No recent activity</div>`}
+          </div>
+        </article>
+      </section>
+    </section>
   `;
 }
 
@@ -290,8 +481,7 @@ function renderChatWorkspace() {
   if (!conversation) {
     return `
       <section class="workspace-shell empty-shell">
-        <div class="empty-icon large">${icon('chats')}</div>
-        <h2>Select a peer</h2>
+        <div class="thread-empty compact-empty"><p>Select a conversation</p></div>
       </section>
     `;
   }
@@ -307,17 +497,25 @@ function renderChatWorkspace() {
             <span>${online ? 'Online' : 'Offline'}${conversation.peerIp ? ` • ${escapeHtml(conversation.peerIp)}` : ''}</span>
           </div>
         </div>
+        <div class="workspace-header-actions">
+          <button class="header-action-btn" data-action="attach-file" type="button" title="Attach files">${icon('attach')}</button>
+          <button class="header-action-btn" data-action="attach-folder" type="button" title="Attach folder">${icon('folder')}</button>
+        </div>
       </header>
-      <div class="chat-layout">
+      <div class="chat-layout single-column">
         <section class="chat-column">
           <div class="message-list">
             ${state.messages.length ? state.messages.map((message) => renderMessageRow(message, conversation)).join('') : `
-              <div class="thread-empty compact-empty">
-                <div class="empty-icon">${icon('chats')}</div>
-                <p>No messages yet</p>
-              </div>
+              <div class="thread-empty compact-empty"><p>No messages yet</p></div>
             `}
           </div>
+          ${state.queuedAttachments.length ? `
+            <div class="queued-strip">
+              ${state.queuedAttachments.map((item) => `
+                <span class="queued-chip">${icon(item.kind === 'folder' ? 'folder' : 'file')}<strong>${escapeHtml(item.name)}</strong></span>
+              `).join('')}
+            </div>
+          ` : ''}
           <section class="composer-shell">
             <textarea id="message-input" placeholder="Message ${escapeHtml(conversation.peerName)}"></textarea>
             <div class="composer-actions">
@@ -329,7 +527,6 @@ function renderChatWorkspace() {
             </div>
           </section>
         </section>
-        ${renderUtilityCard(conversation, online)}
       </div>
     </section>
   `;
@@ -337,22 +534,21 @@ function renderChatWorkspace() {
 
 function renderTransfersWorkspace() {
   const progressEntries = Object.values(state.syncProgress || {});
+  const items = state.transfers.length ? state.transfers : progressEntries;
   return `
     <section class="workspace-shell">
-      <header class="workspace-header simple">
-        <strong>Transfers</strong>
-      </header>
+      <header class="workspace-header simple"><strong>Transfers</strong></header>
       <div class="stack-list">
-        ${(state.transfers.length ? state.transfers : progressEntries).map((item) => `
+        ${items.length ? items.map((item) => `
           <article class="stack-card">
             <div class="stack-top">
-              <span class="stack-icon">${icon(item.resourceType === 'folder' ? 'folder' : 'sync')}</span>
+              <span class="stack-icon">${icon(item.resourceType === 'folder' ? 'folder' : 'transfers')}</span>
               <strong>${escapeHtml(item.folderName || item.file || 'Transfer')}</strong>
               <small>${escapeHtml(item.status || 'pending')}</small>
             </div>
             <div class="progress-shell"><div class="progress-fill" style="width:${Math.max(6, item.percent || 0)}%"></div></div>
           </article>
-        `).join('') || `<div class="thread-empty compact-empty"><div class="empty-icon">${icon('transfers')}</div><p>No transfers</p></div>`}
+        `).join('') : `<div class="thread-empty compact-empty"><p>No transfers</p></div>`}
       </div>
     </section>
   `;
@@ -361,9 +557,7 @@ function renderTransfersWorkspace() {
 function renderSharedWorkspace() {
   return `
     <section class="workspace-shell">
-      <header class="workspace-header simple">
-        <strong>Shared</strong>
-      </header>
+      <header class="workspace-header simple"><strong>Shared</strong></header>
       <div class="stack-list">
         ${state.sharedFolders.length ? state.sharedFolders.map((item) => `
           <article class="stack-card">
@@ -374,7 +568,7 @@ function renderSharedWorkspace() {
             </div>
             <small>${(item.peers || []).length} peers</small>
           </article>
-        `).join('') : `<div class="thread-empty compact-empty"><div class="empty-icon">${icon('shared')}</div><p>No shared items</p></div>`}
+        `).join('') : `<div class="thread-empty compact-empty"><p>No shared items</p></div>`}
       </div>
     </section>
   `;
@@ -383,9 +577,7 @@ function renderSharedWorkspace() {
 function renderInboxWorkspace() {
   return `
     <section class="workspace-shell">
-      <header class="workspace-header simple">
-        <strong>Inbox</strong>
-      </header>
+      <header class="workspace-header simple"><strong>Inbox</strong></header>
       <div class="stack-list">
         ${state.inbox.length ? state.inbox.map((item) => `
           <article class="stack-card">
@@ -394,14 +586,15 @@ function renderInboxWorkspace() {
               <strong>${escapeHtml(item.folderName)}</strong>
               <small>${escapeHtml(item.status)}</small>
             </div>
-            <div class="stack-actions">
-              ${item.status === 'pending' ? `
+            <small>${escapeHtml(item.peerName || 'Unknown peer')}</small>
+            ${item.status === 'pending' ? `
+              <div class="stack-actions horizontal-actions">
                 <button class="inline-action success" data-accept-request="${item.id}" type="button" title="Accept">${icon('accept')}</button>
                 <button class="inline-action" data-reject-request="${item.id}" type="button" title="Reject">${icon('close')}</button>
-              ` : ''}
-            </div>
+              </div>
+            ` : ''}
           </article>
-        `).join('') : `<div class="thread-empty compact-empty"><div class="empty-icon">${icon('inbox')}</div><p>No requests</p></div>`}
+        `).join('') : `<div class="thread-empty compact-empty"><p>No requests</p></div>`}
       </div>
     </section>
   `;
@@ -410,17 +603,42 @@ function renderInboxWorkspace() {
 function renderSettingsWorkspace() {
   return `
     <section class="workspace-shell settings-shell">
-      <header class="workspace-header simple">
-        <strong>Settings</strong>
-      </header>
-      <div class="settings-card">
-        <label for="settings-name">Name</label>
-        <input id="settings-name" value="${escapeHtml(state.currentUser?.name || '')}" />
-        <button class="primary-btn" data-action="save-settings" type="button">Save</button>
-      </div>
-      <div class="settings-meta">
-        <div><span>${icon('online')}</span><small>${escapeHtml(state.currentUser?.hostname || '')}</small></div>
-        <div><span>${icon('folder')}</span><small>${escapeHtml(state.masterFolder)}</small></div>
+      <header class="workspace-header simple"><strong>Settings</strong></header>
+      <div class="settings-grid">
+        <section class="settings-card">
+          <div class="settings-section-head">
+            <strong>Profile</strong>
+            <small>Name broadcast to peers on your network</small>
+          </div>
+          <label for="settings-name">Display name</label>
+          <input id="settings-name" value="${escapeHtml(state.currentUser?.name || '')}" />
+          <div class="settings-actions">
+            <button class="primary-btn" data-action="save-settings" type="button">Save name</button>
+          </div>
+        </section>
+        <section class="settings-card">
+          <div class="settings-section-head">
+            <strong>Storage</strong>
+            <small>Default location for accepted files and folders</small>
+          </div>
+          <label for="settings-master-folder">Master folder</label>
+          <input id="settings-master-folder" value="${escapeHtml(state.masterFolder || '')}" />
+          <div class="settings-actions split-actions">
+            <button class="secondary-btn" data-action="browse-master-folder" type="button">Browse</button>
+            <button class="secondary-btn" data-action="open-master" type="button">Open</button>
+            <button class="primary-btn" data-action="save-master-folder" type="button">Save folder</button>
+          </div>
+        </section>
+        <section class="settings-card">
+          <div class="settings-section-head">
+            <strong>Device</strong>
+            <small>Current node details</small>
+          </div>
+          <div class="settings-meta">
+            <div><span>${icon('home')}</span><small>${escapeHtml(state.currentUser?.hostname || '')}</small></div>
+            <div><span>${icon('chats')}</span><small>${escapeHtml(state.currentUser?.id || '')}</small></div>
+          </div>
+        </section>
       </div>
     </section>
   `;
@@ -432,6 +650,10 @@ function renderStage() {
     return;
   }
 
+  if (state.activeWorkspace === 'home') {
+    stage.innerHTML = renderHomeWorkspace();
+    return;
+  }
   if (state.activeWorkspace === 'chats') {
     stage.innerHTML = renderChatWorkspace();
     return;
@@ -452,20 +674,32 @@ function renderStage() {
 }
 
 function renderAll() {
+  setWindowIcons();
   renderLeftRail();
   renderThreadRail();
   renderStage();
+  renderNotificationPopup();
+  notificationButton.classList.toggle('active', state.notificationsOpen);
 }
 
-function toast(message, type = 'info') {
-  const el = document.createElement('div');
-  el.className = `toast ${type}`;
-  el.textContent = message;
-  toastStack.appendChild(el);
-  setTimeout(() => {
-    el.classList.add('leave');
-    setTimeout(() => el.remove(), 220);
-  }, 2200);
+function renderWorkspaceOnly() {
+  renderStage();
+  renderNotificationPopup();
+  notificationButton.classList.toggle('active', state.notificationsOpen);
+}
+
+function renderRailAndNotifications() {
+  renderLeftRail();
+  renderNotificationPopup();
+  notificationButton.classList.toggle('active', state.notificationsOpen);
+}
+
+function renderConversationShell() {
+  renderLeftRail();
+  renderThreadRail();
+  renderStage();
+  renderNotificationPopup();
+  notificationButton.classList.toggle('active', state.notificationsOpen);
 }
 
 async function refreshSharedState() {
@@ -483,11 +717,34 @@ async function refreshSharedState() {
   state.inbox = inbox;
 }
 
+async function openWorkspace(workspace) {
+  state.activeWorkspace = workspace;
+  if (workspace === 'chats' && !state.activeConversationId) {
+    const firstConversation = getPeerConversationEntries()[0];
+    state.activeConversationId = firstConversation?.id || null;
+    await loadConversationMessages();
+  }
+  state.notificationsOpen = false;
+  renderAll();
+}
+
 document.body.addEventListener('click', async (event) => {
   const workspace = event.target.closest('[data-workspace]');
   if (workspace) {
-    state.activeWorkspace = workspace.dataset.workspace;
-    renderAll();
+    await openWorkspace(workspace.dataset.workspace);
+    return;
+  }
+
+  const workspaceJump = event.target.closest('[data-open-workspace]');
+  if (workspaceJump) {
+    await openWorkspace(workspaceJump.dataset.openWorkspace);
+    return;
+  }
+
+  const openChat = event.target.closest('[data-open-chat]');
+  if (openChat) {
+    state.activeConversationId = openChat.dataset.openChat;
+    await openWorkspace('chats');
     return;
   }
 
@@ -498,6 +755,18 @@ document.body.addEventListener('click', async (event) => {
     await loadConversationMessages();
     renderAll();
     return;
+  }
+
+  if (event.target.closest('#btn-notifications')) {
+    state.notificationsOpen = !state.notificationsOpen;
+    renderAll();
+    return;
+  }
+
+  if (!event.target.closest('.notification-popover') && !event.target.closest('#btn-notifications') && state.notificationsOpen) {
+    state.notificationsOpen = false;
+    renderNotificationPopup();
+    notificationButton.classList.remove('active');
   }
 
   if (event.target.closest('[data-action="open-master"]')) {
@@ -564,6 +833,23 @@ document.body.addEventListener('click', async (event) => {
     return;
   }
 
+  if (event.target.closest('[data-action="browse-master-folder"]')) {
+    const folder = await api.pickMasterFolder();
+    if (!folder) return;
+    const input = document.getElementById('settings-master-folder');
+    if (input) input.value = folder;
+    return;
+  }
+
+  if (event.target.closest('[data-action="save-master-folder"]')) {
+    const folder = document.getElementById('settings-master-folder')?.value?.trim();
+    if (!folder) return;
+    state.masterFolder = await api.setMasterFolder(folder);
+    renderAll();
+    toast('Folder updated', 'success');
+    return;
+  }
+
   const acceptButton = event.target.closest('[data-accept-request]');
   if (acceptButton) {
     const item = state.inbox.find((entry) => entry.id === acceptButton.dataset.acceptRequest);
@@ -610,7 +896,7 @@ api.on('peers-updated', async (peers) => {
 
 api.on('peer-presence-updated', async (peers) => {
   state.peers = peers;
-  renderAll();
+  renderConversationShell();
 });
 
 api.on('conversation-updated', async (conversations) => {
@@ -618,7 +904,7 @@ api.on('conversation-updated', async (conversations) => {
   if (state.activeConversationId) {
     await loadConversationMessages();
   }
-  renderAll();
+  renderConversationShell();
 });
 
 api.on('message-received', async () => {
@@ -628,41 +914,53 @@ api.on('message-received', async () => {
     state.activeConversationId = first?.id || null;
   }
   await loadConversationMessages();
-  renderAll();
+  renderConversationShell();
 });
 
 api.on('transfer-updated', async (transfers) => {
   state.transfers = Array.isArray(transfers) ? transfers : await api.getTransfers();
   state.syncProgress = await api.getSyncProgress();
-  if (state.activeWorkspace === 'transfers') {
+  renderRailAndNotifications();
+  if (state.activeWorkspace === 'home' || state.activeWorkspace === 'transfers' || state.activeWorkspace === 'shared') {
     renderStage();
   }
 });
 
 api.on('inbox-updated', (inbox) => {
   state.inbox = inbox;
-  renderAll();
+  renderConversationShell();
 });
 
 api.on('access-accepted', async () => {
   await refreshSharedState();
   state.conversations = await api.getConversations();
-  renderAll();
+  renderConversationShell();
 });
 
 api.on('access-rejected', async () => {
   state.conversations = await api.getConversations();
-  renderAll();
+  renderConversationShell();
 });
 
 api.on('sync-progress', async (progress) => {
   state.syncProgress[progress.folderId] = progress;
-  if (state.activeWorkspace === 'transfers') {
+  if (state.notificationsOpen) {
+    renderNotificationPopup();
+    notificationButton.classList.toggle('active', state.notificationsOpen);
+  }
+  if (state.activeWorkspace === 'home' || state.activeWorkspace === 'transfers' || state.activeWorkspace === 'shared') {
     renderStage();
   }
 });
 
-api.on('new-notification', () => {});
+api.on('new-notification', (notification) => {
+  if (notification?.message) toast(notification.message, 'info');
+});
+
+api.on('window-state-changed', (windowState) => {
+  state.windowState = windowState;
+  setWindowIcons();
+});
 
 hydrate().catch((error) => {
   console.error('Failed to hydrate Socket renderer:', error);

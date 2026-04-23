@@ -208,6 +208,10 @@ class SyncManager {
     }
   }
 
+  setMasterFolder(masterFolder) {
+    this.masterFolder = masterFolder;
+  }
+
   needsSync(localPath, remoteFile) {
     if (!fs.existsSync(localPath)) return true;
     const stat = fs.statSync(localPath);

@@ -13,6 +13,7 @@
     "appId": "com.socket.app",
     "productName": "Socket",
     "win": {
+      "icon": "img/socket_icon.png",
       "target": "nsis",
       "publish": [
         "github"

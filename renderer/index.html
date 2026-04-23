@@ -9,13 +9,15 @@
 <body>
   <div class="titlebar">
     <div class="titlebar-brand">
-      <div class="brand-mark">S</div>
+      <img class="brand-mark" src="../img/socket_icon.png" alt="Socket" />
       <div class="brand-copy">
         <span class="brand-name">Socket</span>
-        <span class="brand-subtitle">Local network messaging and transfers</span>
       </div>
     </div>
     <div class="titlebar-controls">
+      <button class="titlebar-icon-btn" id="btn-notifications" type="button" aria-label="Notifications">
+        <span class="icon-host"></span>
+      </button>
       <button class="ctrl-btn" id="btn-minimize" type="button" aria-label="Minimize">
         <span></span>
       </button>
@@ -35,6 +37,7 @@
   </main>
 
   <div class="toast-stack" id="toast-stack"></div>
+  <div class="notification-anchor" id="notification-anchor"></div>
 
   <script src="app.js"></script>
 </body>
