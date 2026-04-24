@@ -112,7 +112,6 @@ svg {
 .rail-icon-btn,
 .rail-nav-btn,
 .rail-utility,
-.rail-account,
 .header-action-btn,
 .inline-action,
 .primary-btn,
@@ -131,7 +130,6 @@ svg {
 .rail-icon-btn:hover,
 .rail-nav-btn:hover,
 .rail-utility:hover,
-.rail-account:hover,
 .header-action-btn:hover,
 .inline-action:hover,
 .primary-btn:hover,
@@ -157,7 +155,24 @@ svg {
   color: var(--accent-2);
 }
 
-.ctrl-btn span,
+.titlebar-icon-btn.has-count::after {
+  content: attr(data-count);
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #111;
+  font-size: 11px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.ctrl-btn > span,
 .ctrl-btn .outline,
 .ctrl-btn .cross {
   position: absolute;
@@ -167,7 +182,7 @@ svg {
   height: 12px;
 }
 
-.ctrl-btn span {
+.ctrl-btn .min-line {
   height: 1px;
   top: 16px;
   background: currentColor;
@@ -175,6 +190,7 @@ svg {
 
 .ctrl-btn .outline {
   border: 1px solid currentColor;
+  background: transparent;
 }
 
 .ctrl-btn .outline.restore-shape {
@@ -268,6 +284,11 @@ svg {
   text-align: left;
 }
 
+.popover-item.request-item {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: start;
+}
+
 .popover-item-copy {
   display: flex;
   flex-direction: column;
@@ -301,6 +322,12 @@ svg {
   padding: 18px;
   text-align: center;
   color: var(--muted);
+}
+
+.popover-item-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .app-frame {
@@ -337,10 +364,8 @@ svg {
   gap: 10px;
 }
 
-.rail-brand-button,
 .rail-nav-btn,
-.rail-utility,
-.rail-account {
+.rail-utility {
   width: 100%;
   min-height: 48px;
   border-radius: 16px;
@@ -353,40 +378,12 @@ svg {
   text-align: left;
 }
 
-.rail-brand-button {
-  min-height: 58px;
-  border: 1px solid var(--line);
-}
-
-.rail-brand-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 9px;
-  flex: 0 0 auto;
-}
-
-.rail-brand-copy,
-.rail-account-copy {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.rail-brand-copy strong,
-.rail-account-copy strong {
-  font-size: 14px;
-  line-height: 1.1;
-}
-
-.rail-brand-copy small,
-.rail-account-copy small,
 .rail-label {
   color: var(--muted);
   font-size: 12px;
 }
 
-.rail-nav-btn.active,
-.rail-account.active {
+.rail-nav-btn.active {
   background: rgba(230, 160, 95, 0.12);
   color: var(--accent-2);
 }
@@ -396,8 +393,7 @@ svg {
 }
 
 .rail-nav-btn .icon-wrap,
-.rail-utility .icon-wrap,
-.rail-account .icon-wrap {
+.rail-utility .icon-wrap {
   width: 18px;
   height: 18px;
   display: grid;
@@ -410,6 +406,22 @@ svg {
   color: inherit;
   font-size: 13px;
   font-weight: 600;
+}
+
+.rail-button-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.rail-button-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .rail-count {
@@ -429,9 +441,68 @@ svg {
   font-weight: 700;
 }
 
-.rail-utility-wide,
-.rail-account {
+.rail-utility-wide {
   min-height: 46px;
+}
+
+.rail-profile-row {
+  width: 100%;
+  min-height: 58px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  text-align: left;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.rail-profile-row:hover {
+  border-color: var(--line-2);
+}
+
+.rail-profile-row.active {
+  background: rgba(230, 160, 95, 0.12);
+  color: var(--accent-2);
+}
+
+.profile-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.rail-profile-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rail-profile-copy strong {
+  font-size: 14px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rail-profile-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .thread-rail {
@@ -565,6 +636,45 @@ svg {
   font-size: 28px;
 }
 
+.summary-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.summary-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.summary-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: var(--panel-3);
+  color: var(--accent-2);
+  flex: 0 0 auto;
+}
+
+.summary-copy {
+  min-width: 0;
+}
+
+.summary-copy strong {
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.summary-copy p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-word;
+}
+
 .main-stage {
   padding: 12px;
 }
@@ -578,6 +688,12 @@ svg {
 
 .chat-shell {
   height: 100%;
+}
+
+.chat-shell.drop-active .chat-column {
+  outline: 1px solid rgba(230, 160, 95, 0.52);
+  outline-offset: 2px;
+  border-radius: 18px;
 }
 
 .workspace-header {
@@ -795,6 +911,25 @@ svg {
   padding: 12px;
 }
 
+.composer-shell.disabled {
+  opacity: 0.72;
+}
+
+.composer-offline-note {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chat-drop-indicator {
+  border: 1px dashed rgba(230, 160, 95, 0.45);
+  border-radius: 14px;
+  padding: 10px 12px;
+  color: var(--accent-2);
+  background: rgba(230, 160, 95, 0.08);
+  font-size: 12px;
+}
+
 .composer-shell textarea,
 #settings-name {
   width: 100%;
@@ -803,6 +938,22 @@ svg {
   background: var(--panel-3);
   color: var(--text);
   padding: 14px;
+}
+
+#settings-master-folder {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel-3);
+  color: var(--text);
+  padding: 14px;
+}
+
+.header-action-btn:disabled,
+.primary-btn:disabled,
+.composer-shell textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .composer-shell textarea {
@@ -862,6 +1013,7 @@ svg {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+  align-items: start;
 }
 
 .settings-section-head {
@@ -892,6 +1044,22 @@ svg {
   padding: 12px 16px;
   background: var(--panel-3);
   color: var(--text);
+}
+
+.settings-shell .workspace-header {
+  min-height: 50px;
+}
+
+.settings-shell .settings-card {
+  min-height: 0;
+}
+
+.settings-shell .settings-card:last-child {
+  grid-column: 1 / -1;
+}
+
+.settings-shell input {
+  min-height: 50px;
 }
 
 .thread-empty {

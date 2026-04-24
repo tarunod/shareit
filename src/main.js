@@ -218,6 +218,27 @@ function registerHandlers() {
     return result.canceled ? null : result.filePaths[0];
   });
 
+  ipcMain.handle('resolve-path-kinds', (_, paths) => {
+    if (!Array.isArray(paths)) return [];
+    return paths
+      .filter((entry) => typeof entry === 'string' && entry.trim())
+      .map((entry) => {
+        const normalized = entry.trim();
+        let kind = 'file';
+        try {
+          const stats = fs.statSync(normalized);
+          kind = stats.isDirectory() ? 'folder' : 'file';
+        } catch (error) {
+          kind = 'file';
+        }
+        return {
+          path: normalized,
+          name: path.basename(normalized),
+          kind,
+        };
+      });
+  });
+
   ipcMain.handle('pick-master-folder', async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openDirectory', 'createDirectory'],

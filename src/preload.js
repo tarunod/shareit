@@ -16,6 +16,7 @@ const api = {
   markConversationRead: (conversationId) => ipcRenderer.invoke('mark-conversation-read', conversationId),
   pickFile: () => ipcRenderer.invoke('pick-file'),
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
+  resolvePathKinds: (paths) => ipcRenderer.invoke('resolve-path-kinds', paths),
   shareFolder: (data) => ipcRenderer.invoke('share-folder', data),
   openMasterFolder: () => ipcRenderer.invoke('open-master-folder'),
   openSyncedFolder: (id) => ipcRenderer.invoke('open-synced-folder', id),
