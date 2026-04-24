@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const chokidar = require('chokidar');
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, shell, Notification } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const { createServer } = require('./server');
 const { PeerDiscovery } = require('./discovery');
@@ -50,6 +50,40 @@ function emitWindowState() {
   mainWindow.webContents.send('window-state-changed', {
     isMaximized: mainWindow.isMaximized(),
   });
+}
+
+function isWindowForeground() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  return mainWindow.isVisible() && !mainWindow.isMinimized();
+}
+
+function notifyApp(event) {
+  const settings = store.getSettings();
+  const soundEnabled = settings.notificationSoundEnabled !== false;
+  const payload = {
+    id: event.id || crypto.randomUUID(),
+    type: event.type || 'info',
+    title: event.title || 'Socket',
+    message: event.message || '',
+    at: Date.now(),
+    playSound: soundEnabled,
+    level: event.level || 'info',
+  };
+
+  if (isWindowForeground()) {
+    mainWindow.webContents.send('app-notification', payload);
+    return;
+  }
+
+  if (Notification.isSupported()) {
+    const desktop = new Notification({
+      title: payload.title,
+      body: payload.message,
+      silent: !soundEnabled,
+      icon: APP_ICON_PATH,
+    });
+    desktop.show();
+  }
 }
 
 function createWindow() {
@@ -178,6 +212,12 @@ function registerHandlers() {
     store.setUserInfo(info);
     if (peerDiscovery) peerDiscovery.updateUserInfo(info);
     return true;
+  });
+  ipcMain.handle('get-settings', () => store.getSettings());
+  ipcMain.handle('set-settings', (_, settingsPatch) => {
+    const settings = store.setSettings(settingsPatch || {});
+    if (peerDiscovery) peerDiscovery.updateUserInfo();
+    return settings;
   });
   ipcMain.handle('get-peers', () => peerDiscovery ? peerDiscovery.getPeers() : []);
   ipcMain.handle('get-shared-folders', () => store.getSharedFolders());
@@ -417,10 +457,10 @@ if (!gotTheLock) {
     registerHandlers();
     createWindow();
     createTray();
-    server = await createServer(mainWindow);
-    peerDiscovery = new PeerDiscovery(mainWindow, server.port);
+    server = await createServer(mainWindow, notifyApp);
+    peerDiscovery = new PeerDiscovery(mainWindow, server.port, notifyApp);
     peerDiscovery.start();
-    syncManager = new SyncManager(mainWindow, getMasterFolder(), peerDiscovery);
+    syncManager = new SyncManager(mainWindow, getMasterFolder(), peerDiscovery, notifyApp);
     syncManager.start();
     emitConversations();
     emitInbox();

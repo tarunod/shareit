@@ -2,6 +2,11 @@ const api = window.socketApp || window.shareit;
 
 const state = {
   currentUser: null,
+  settings: {
+    avatarStyle: 'adventurer',
+    avatarSeed: null,
+    notificationSoundEnabled: true,
+  },
   peers: [],
   conversations: [],
   messages: [],
@@ -19,6 +24,8 @@ const state = {
   notificationsOpen: false,
   windowState: { isMaximized: false },
 };
+
+const DICEBEAR_STYLES = ['adventurer', 'avataaars', 'bottts', 'identicon', 'pixel-art'];
 
 const rail = document.getElementById('left-rail');
 const threadRail = document.getElementById('thread-rail');
@@ -39,6 +46,14 @@ function escapeHtml(value) {
 
 function initials(name) {
   return (name || '?').slice(0, 1).toUpperCase();
+}
+
+function getAvatarUrl() {
+  return state.currentUser?.avatar || '';
+}
+
+function generateAvatarSeed() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 function formatTime(value, withDay = false) {
@@ -101,6 +116,24 @@ function toast(message, type = 'info') {
     el.classList.add('leave');
     setTimeout(() => el.remove(), 220);
   }, 2200);
+}
+
+function playNotificationSound() {
+  if (state.settings.notificationSoundEnabled === false) return;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+
+  const context = new AudioContextClass();
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = 'sine';
+  oscillator.frequency.value = 820;
+  gain.gain.value = 0.02;
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start();
+  oscillator.stop(context.currentTime + 0.11);
+  oscillator.onended = () => context.close();
 }
 
 function getPeerConversationEntries() {
@@ -231,7 +264,8 @@ async function hydrate() {
   }
 
   state.currentUser = await api.getUserInfo();
-  const [peers, conversations, inbox, transfers, sharedFolders, receivedFolders, syncProgress, masterFolder, windowState] = await Promise.all([
+  const [settings, peers, conversations, inbox, transfers, sharedFolders, receivedFolders, syncProgress, masterFolder, windowState] = await Promise.all([
+    api.getSettings ? api.getSettings() : Promise.resolve({}),
     api.getPeers(),
     api.getConversations(),
     api.getInboxItems(),
@@ -243,6 +277,12 @@ async function hydrate() {
     api.getWindowState(),
   ]);
 
+  state.settings = {
+    avatarStyle: 'adventurer',
+    avatarSeed: null,
+    notificationSoundEnabled: true,
+    ...(settings || {}),
+  };
   state.peers = peers;
   state.conversations = conversations;
   state.inbox = inbox;
@@ -339,7 +379,7 @@ function renderLeftRail() {
         </span>
       </button>
       <button class="rail-profile-row ${state.activeWorkspace === 'settings' ? 'active' : ''}" data-workspace="settings" type="button" title="Open settings">
-        <span class="profile-avatar">${initials(state.currentUser?.name)}</span>
+        <span class="profile-avatar">${getAvatarUrl() ? `<img src="${escapeHtml(getAvatarUrl())}" alt="${escapeHtml(state.currentUser?.name || 'Avatar')}" />` : initials(state.currentUser?.name)}</span>
         <span class="rail-profile-copy">
           <strong>${escapeHtml(state.currentUser?.name || 'Unknown')}</strong>
           <small>Profile and settings</small>
@@ -674,10 +714,22 @@ function renderSettingsWorkspace() {
             <strong>Profile</strong>
             <small>Name broadcast to peers on your network</small>
           </div>
+          <div class="settings-avatar-row">
+            <div class="settings-avatar-preview">
+              ${getAvatarUrl() ? `<img src="${escapeHtml(getAvatarUrl())}" alt="${escapeHtml(state.currentUser?.name || 'Avatar')}" />` : initials(state.currentUser?.name)}
+            </div>
+            <div class="settings-avatar-controls">
+              <label for="settings-avatar-style">Avatar style</label>
+              <select id="settings-avatar-style">
+                ${DICEBEAR_STYLES.map((style) => `<option value="${style}" ${state.settings.avatarStyle === style ? 'selected' : ''}>${style}</option>`).join('')}
+              </select>
+            </div>
+          </div>
           <label for="settings-name">Display name</label>
           <input id="settings-name" value="${escapeHtml(state.currentUser?.name || '')}" />
           <div class="settings-actions">
             <button class="primary-btn" data-action="save-settings" type="button">Save name</button>
+            <button class="secondary-btn" data-action="regenerate-avatar" type="button">Regenerate avatar</button>
           </div>
         </section>
         <section class="settings-card">
@@ -698,6 +750,10 @@ function renderSettingsWorkspace() {
             <strong>Device</strong>
             <small>Current node details</small>
           </div>
+          <label class="settings-toggle">
+            <input id="settings-notification-sound" type="checkbox" ${state.settings.notificationSoundEnabled === false ? '' : 'checked'} />
+            <span>Notification sound</span>
+          </label>
           <div class="settings-meta">
             <div><span>${icon('home')}</span><small>${escapeHtml(state.currentUser?.hostname || '')}</small></div>
             <div><span>${icon('chats')}</span><small>${escapeHtml(state.currentUser?.id || '')}</small></div>
@@ -906,11 +962,32 @@ document.body.addEventListener('click', async (event) => {
 
   if (event.target.closest('[data-action="save-settings"]')) {
     const name = document.getElementById('settings-name')?.value?.trim();
+    const avatarStyle = document.getElementById('settings-avatar-style')?.value || state.settings.avatarStyle;
+    const soundEnabled = !!document.getElementById('settings-notification-sound')?.checked;
     if (!name) return;
+    await api.setSettings({
+      avatarStyle,
+      notificationSoundEnabled: soundEnabled,
+    });
+    state.settings = await api.getSettings();
     await api.setUserInfo({ name });
     state.currentUser = await api.getUserInfo();
     renderAll();
     toast('Saved', 'success');
+    return;
+  }
+
+  if (event.target.closest('[data-action="regenerate-avatar"]')) {
+    const avatarStyle = document.getElementById('settings-avatar-style')?.value || state.settings.avatarStyle;
+    await api.setSettings({
+      avatarStyle,
+      avatarSeed: generateAvatarSeed(),
+      notificationSoundEnabled: !!document.getElementById('settings-notification-sound')?.checked,
+    });
+    state.settings = await api.getSettings();
+    state.currentUser = await api.getUserInfo();
+    renderAll();
+    toast('Avatar updated', 'success');
     return;
   }
 
@@ -1021,6 +1098,15 @@ stage.addEventListener('drop', async (event) => {
   if (added > 0) toast(`${added} attachment${added === 1 ? '' : 's'} queued`, 'success');
 });
 
+document.body.addEventListener('change', async (event) => {
+  if (event.target.id === 'settings-notification-sound') {
+    const enabled = !!event.target.checked;
+    await api.setSettings({ notificationSoundEnabled: enabled });
+    state.settings = await api.getSettings();
+    toast(`Notification sound ${enabled ? 'enabled' : 'disabled'}`, 'info');
+  }
+});
+
 document.getElementById('btn-minimize').addEventListener('click', () => api.minimize());
 document.getElementById('btn-maximize').addEventListener('click', () => api.maximize());
 document.getElementById('btn-close').addEventListener('click', () => api.close());
@@ -1092,6 +1178,12 @@ api.on('sync-progress', async (progress) => {
 
 api.on('new-notification', (notification) => {
   if (notification?.message) toast(notification.message, 'info');
+});
+
+api.on('app-notification', (notification) => {
+  if (!notification?.message) return;
+  toast(notification.message, notification.level || 'info');
+  if (notification.playSound) playNotificationSound();
 });
 
 api.on('window-state-changed', (windowState) => {

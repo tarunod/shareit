@@ -14,9 +14,10 @@ const PEER_TIMEOUT = 10000;
 const BEACON_TYPES = new Set(['socket-beacon', 'shareit-beacon']);
 
 class PeerDiscovery {
-  constructor(mainWindow, serverPort) {
+  constructor(mainWindow, serverPort, notifyApp) {
     this.mainWindow = mainWindow;
     this.serverPort = serverPort;
+    this.notifyApp = notifyApp;
     this.peers = new Map();
     this.socket = null;
     this.broadcastTimer = null;
@@ -50,10 +51,14 @@ class PeerDiscovery {
         this.emitPresenceUpdate();
 
         if (!existing) {
-          this.mainWindow.webContents.send('new-notification', {
-            type: 'peer-joined',
-            message: `${data.name} joined your local network`,
-          });
+          if (this.notifyApp) {
+            this.notifyApp({
+              type: 'peer-joined',
+              title: 'Peer joined',
+              message: `${data.name} joined your local network`,
+              level: 'info',
+            });
+          }
         }
       } catch (e) {
         logger.warn('Discovery', `Failed to process discovery packet: ${e.message}`);

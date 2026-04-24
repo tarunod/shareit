@@ -18,6 +18,9 @@ function getInitialData() {
     userInfo: null,
     settings: {
       masterFolder: 'C:\\Socket',
+      avatarStyle: 'adventurer',
+      avatarSeed: null,
+      notificationSoundEnabled: true,
     },
     sharedFolders: [],
     receivedFolders: [],
@@ -49,6 +52,26 @@ function getConversationId(peerId) {
 
 function now() {
   return Date.now();
+}
+
+function buildDiceBearAvatar(style, seed) {
+  const normalizedStyle = style || 'adventurer';
+  const normalizedSeed = seed || 'socket-user';
+  return `https://api.dicebear.com/9.x/${encodeURIComponent(normalizedStyle)}/svg?seed=${encodeURIComponent(normalizedSeed)}`;
+}
+
+function getDefaultAvatarSeed() {
+  const fallbackName = data.userInfo?.name || os.userInfo().username || 'socket-user';
+  return String(fallbackName).trim() || 'socket-user';
+}
+
+function syncUserAvatarFromSettings() {
+  if (!data.userInfo) return;
+  const settings = data.settings || {};
+  const style = settings.avatarStyle || 'adventurer';
+  const seed = settings.avatarSeed || getDefaultAvatarSeed();
+  const avatar = buildDiceBearAvatar(style, seed);
+  if (data.userInfo.avatar !== avatar) data.userInfo.avatar = avatar;
 }
 
 function ensureConversation(peer) {
@@ -145,6 +168,7 @@ function upsertTransfer(transfer) {
 
 const store = {
   getUserInfo() {
+    let changed = false;
     if (!data.userInfo) {
       data.userInfo = {
         id: crypto.randomUUID(),
@@ -152,21 +176,62 @@ const store = {
         hostname: os.hostname(),
         avatar: null,
       };
-      save();
+      changed = true;
     }
+    const beforeAvatar = data.userInfo.avatar;
+    syncUserAvatarFromSettings();
+    if (beforeAvatar !== data.userInfo.avatar) changed = true;
+    if (changed) save();
     return data.userInfo;
   },
 
   setUserInfo(info) {
     data.userInfo = { ...data.userInfo, ...info };
+    syncUserAvatarFromSettings();
     save();
   },
 
   getSettings() {
+    let changed = false;
     if (!data.settings) {
-      data.settings = { masterFolder: 'C:\\Socket' };
-      save();
+      data.settings = {
+        masterFolder: 'C:\\Socket',
+        avatarStyle: 'adventurer',
+        avatarSeed: null,
+        notificationSoundEnabled: true,
+      };
+      changed = true;
     }
+    const merged = {
+      masterFolder: 'C:\\Socket',
+      avatarStyle: 'adventurer',
+      avatarSeed: null,
+      notificationSoundEnabled: true,
+      ...data.settings,
+    };
+    if (
+      merged.masterFolder !== data.settings.masterFolder ||
+      merged.avatarStyle !== data.settings.avatarStyle ||
+      merged.avatarSeed !== data.settings.avatarSeed ||
+      merged.notificationSoundEnabled !== data.settings.notificationSoundEnabled
+    ) {
+      changed = true;
+    }
+    data.settings = merged;
+    const beforeAvatar = data.userInfo?.avatar;
+    syncUserAvatarFromSettings();
+    if (beforeAvatar !== data.userInfo?.avatar) changed = true;
+    if (changed) save();
+    return data.settings;
+  },
+
+  setSettings(settingsPatch) {
+    data.settings = {
+      ...store.getSettings(),
+      ...settingsPatch,
+    };
+    syncUserAvatarFromSettings();
+    save();
     return data.settings;
   },
 
@@ -175,10 +240,7 @@ const store = {
   },
 
   setMasterFolder(masterFolder) {
-    data.settings = {
-      ...store.getSettings(),
-      masterFolder,
-    };
+    data.settings = { ...store.getSettings(), masterFolder };
     save();
     return data.settings.masterFolder;
   },

@@ -12,13 +12,15 @@ const { store } = require('./store');
 const logger = require('./logger');
 
 class SyncManager {
-  constructor(mainWindow, masterFolder, peerDiscovery) {
+  constructor(mainWindow, masterFolder, peerDiscovery, notifyApp) {
     this.mainWindow = mainWindow;
     this.masterFolder = masterFolder;
     this.peerDiscovery = peerDiscovery;
+    this.notifyApp = notifyApp;
     this.watchers = new Map(); // folderId -> chokidar watcher
     this.progress = new Map(); // folderId -> progress info
     this.syncTimers = new Map(); // folderId -> interval
+    this.lastNotifiedStatus = new Map();
   }
 
   start() {
@@ -116,6 +118,7 @@ class SyncManager {
         status: 'syncing',
         percent: 0,
       });
+      this.notifySyncMilestone(folder, 'syncing', `Sync started for ${folder.name}`);
 
       this.progress.set(folder.id, {
         folderId: folder.id,
@@ -185,6 +188,7 @@ class SyncManager {
         percent: 100,
         lastSync: Date.now(),
       });
+      this.notifySyncMilestone(folder, 'synced', `Sync completed for ${folder.name}`);
       logger.info('Sync', `Completed sync for folder ${folder.name}`);
 
     } catch (err) {
@@ -204,6 +208,7 @@ class SyncManager {
         percent: 0,
         error: err.message,
       });
+      this.notifySyncMilestone(folder, 'error', `Sync failed for ${folder.name}: ${err.message}`);
       this.emitProgress(folder.id);
     }
   }
@@ -256,6 +261,18 @@ class SyncManager {
       this.mainWindow.webContents.send('sync-progress', prog);
       this.mainWindow.webContents.send('transfer-updated', store.getTransfers());
     }
+  }
+
+  notifySyncMilestone(folder, status, message) {
+    if (!this.notifyApp) return;
+    if (this.lastNotifiedStatus.get(folder.id) === status) return;
+    this.lastNotifiedStatus.set(folder.id, status);
+    this.notifyApp({
+      type: 'sync',
+      title: status === 'error' ? 'Sync error' : status === 'synced' ? 'Sync completed' : 'Sync started',
+      message,
+      level: status === 'error' ? 'error' : status === 'synced' ? 'success' : 'info',
+    });
   }
 
   getProgress() {

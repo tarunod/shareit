@@ -23,7 +23,7 @@ function emitTransferState(mainWindow) {
   mainWindow.webContents.send('transfer-updated', store.getTransfers());
 }
 
-function createServer(mainWindow) {
+function createServer(mainWindow, notifyApp) {
   return new Promise((resolve, reject) => {
     const app = express();
     app.use(express.json());
@@ -127,6 +127,14 @@ function createServer(mainWindow) {
         });
         emitInboxState(mainWindow);
         emitConversationState(mainWindow);
+        if (notifyApp) {
+          notifyApp({
+            type: 'request',
+            title: 'New access request',
+            message: `${request.ownerInfo?.name || 'A peer'} wants to share ${request.folderName}.`,
+            level: 'info',
+          });
+        }
       });
 
       socket.on('access-response', (response) => {
@@ -140,6 +148,16 @@ function createServer(mainWindow) {
           unread: true,
         });
         emitConversationState(mainWindow);
+        if (notifyApp) {
+          notifyApp({
+            type: 'request',
+            title: response.accepted ? 'Share accepted' : 'Share declined',
+            message: response.accepted
+              ? `${peer.name} accepted ${response.folderName}.`
+              : `${peer.name} declined ${response.folderName}.`,
+            level: response.accepted ? 'success' : 'info',
+          });
+        }
         if (response.accepted) {
           mainWindow.webContents.send('access-accepted', response);
         } else {

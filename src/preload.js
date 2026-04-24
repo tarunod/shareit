@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 const api = {
   getUserInfo: () => ipcRenderer.invoke('get-user-info'),
   setUserInfo: (info) => ipcRenderer.invoke('set-user-info', info),
+  getSettings: () => ipcRenderer.invoke('get-settings'),
+  setSettings: (settings) => ipcRenderer.invoke('set-settings', settings),
   getPeers: () => ipcRenderer.invoke('get-peers'),
   getSharedFolders: () => ipcRenderer.invoke('get-shared-folders'),
   getReceivedFolders: () => ipcRenderer.invoke('get-received-folders'),
@@ -49,6 +51,7 @@ const api = {
       'access-rejected',
       'sync-progress',
       'new-notification',
+      'app-notification',
       'window-state-changed',
     ];
     if (validChannels.includes(channel)) {
