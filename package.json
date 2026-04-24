@@ -1,6 +1,6 @@
 {
   "name": "socket",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Local network messaging and transfer workspace",
   "main": "src/main.js",
   "scripts": {
