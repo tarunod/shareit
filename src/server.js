@@ -100,6 +100,23 @@ function createServer(mainWindow, notifyApp) {
         });
         emitConversationState(mainWindow);
         mainWindow.webContents.send('message-received', stored);
+        if (notifyApp) {
+          const attachmentCount = Array.isArray(message.attachments) ? message.attachments.length : 0;
+          const textSnippet = String(message.text || '').trim();
+          const body = textSnippet
+            ? textSnippet.slice(0, 120)
+            : attachmentCount > 0
+              ? `${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'}`
+              : 'New message';
+          notifyApp({
+            type: 'message',
+            title: `Message from ${peer.name || 'Peer'}`,
+            message: body,
+            level: 'info',
+            dedupeKey: `dm:${stored.id}`,
+            dedupeMs: 600000,
+          });
+        }
       });
 
       socket.on('access-request', (request) => {
@@ -118,36 +135,76 @@ function createServer(mainWindow, notifyApp) {
           resourceType: request.type,
           request,
         });
+        store.upsertTransfer({
+          id: request.folderId,
+          kind: 'incoming-share',
+          folderId: request.folderId,
+          folderName: request.folderName,
+          peerId: request.ownerInfo?.id,
+          peerName: request.ownerInfo?.name,
+          status: 'pending-request',
+          percent: 0,
+          resourceType: request.type || 'folder',
+          requestId: request.requestId,
+          direction: 'incoming',
+        });
         store.addSystemMessage({
           peer,
           text: `${request.ownerInfo?.name || 'A peer'} wants to share ${request.folderName} with you.`,
-          meta: { kind: 'access-request', requestId: request.requestId, folderId: request.folderId },
+          meta: {
+            kind: 'access-request',
+            requestId: request.requestId,
+            folderId: request.folderId,
+            request,
+          },
           unread: true,
           timestamp: request.requestedAt,
         });
         emitInboxState(mainWindow);
         emitConversationState(mainWindow);
+        emitTransferState(mainWindow);
         if (notifyApp) {
           notifyApp({
             type: 'request',
             title: 'New access request',
             message: `${request.ownerInfo?.name || 'A peer'} wants to share ${request.folderName}.`,
             level: 'info',
+            dedupeKey: `request:${request.requestId}`,
+            dedupeMs: 600000,
           });
         }
       });
 
       socket.on('access-response', (response) => {
         const peer = response.ownerInfo || { id: 'unknown', name: 'Unknown peer' };
+        store.upsertTransfer({
+          id: response.folderId,
+          kind: 'share',
+          folderId: response.folderId,
+          folderName: response.folderName,
+          peerId: peer.id,
+          peerName: peer.name,
+          status: response.accepted ? 'accepted' : 'rejected',
+          percent: response.accepted ? 100 : 0,
+          direction: 'outgoing',
+          requestId: response.requestId,
+        });
         store.addSystemMessage({
           peer,
           text: response.accepted
             ? `${peer.name} accepted your share request for ${response.folderName}.`
             : `${peer.name} declined your share request for ${response.folderName}.`,
-          meta: { kind: 'access-response', folderId: response.folderId, requestId: response.requestId },
+          meta: {
+            kind: 'access-response',
+            folderId: response.folderId,
+            requestId: response.requestId,
+            accepted: !!response.accepted,
+            folderName: response.folderName,
+          },
           unread: true,
         });
         emitConversationState(mainWindow);
+        emitTransferState(mainWindow);
         if (notifyApp) {
           notifyApp({
             type: 'request',
@@ -156,6 +213,8 @@ function createServer(mainWindow, notifyApp) {
               ? `${peer.name} accepted ${response.folderName}.`
               : `${peer.name} declined ${response.folderName}.`,
             level: response.accepted ? 'success' : 'info',
+            dedupeKey: `access-response:${response.requestId}:${response.accepted ? 'accepted' : 'rejected'}`,
+            dedupeMs: 600000,
           });
         }
         if (response.accepted) {

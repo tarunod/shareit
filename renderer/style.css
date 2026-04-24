@@ -734,6 +734,29 @@ svg {
   gap: 8px;
 }
 
+.transfer-header {
+  align-items: center;
+}
+
+.section-switch {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.section-tab {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-3);
+  color: var(--muted);
+  padding: 7px 12px;
+}
+
+.section-tab.active {
+  border-color: rgba(230, 160, 95, 0.5);
+  background: rgba(230, 160, 95, 0.12);
+  color: var(--accent-2);
+}
+
 .header-action-btn,
 .inline-action {
   width: 36px;
@@ -882,6 +905,95 @@ svg {
   line-height: 1.55;
 }
 
+.markdown-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body pre {
+  margin: 0;
+}
+
+.markdown-body ul {
+  padding-left: 18px;
+}
+
+.markdown-body code {
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.markdown-body pre {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.markdown-body pre code {
+  background: none;
+  border-radius: 0;
+  padding: 0;
+}
+
+.markdown-body a {
+  color: var(--accent-2);
+}
+
+.message-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.message-card-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.message-card-copy small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.message-card-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.message-status-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.message-status-chip.success {
+  color: var(--success);
+  border-color: rgba(99, 207, 159, 0.34);
+}
+
+.message-status-chip.danger {
+  color: var(--danger);
+  border-color: rgba(255, 127, 115, 0.34);
+}
+
 .attachment-list,
 .settings-meta {
   display: flex;
@@ -1014,6 +1126,10 @@ svg {
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
 }
 
+.progress-fill.incoming-fill {
+  background: linear-gradient(90deg, #63cf9f, #8fe2ba);
+}
+
 .settings-card {
   display: flex;
   flex-direction: column;
@@ -1091,10 +1207,68 @@ svg {
   gap: 8px;
   font-size: 13px;
   color: var(--text);
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-3);
 }
 
 .settings-toggle input {
   accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.settings-control-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-update-box {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--panel-3);
+}
+
+.settings-update-box small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-update-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settings-update-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+}
+
+.update-state-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--accent-2);
+  text-transform: capitalize;
+}
+
+.settings-update-box .settings-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
 }
 
 .secondary-btn {
@@ -1117,8 +1291,14 @@ svg {
   grid-column: 1 / -1;
 }
 
-.settings-shell input {
+.settings-shell input[type="text"],
+.settings-shell #settings-name,
+.settings-shell #settings-master-folder {
   min-height: 50px;
+}
+
+.settings-shell input[type="checkbox"] {
+  min-height: 0;
 }
 
 .thread-empty {
@@ -1187,6 +1367,11 @@ svg {
   }
 
   .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-control-list,
+  .settings-update-meta {
     grid-template-columns: 1fr;
   }
 }

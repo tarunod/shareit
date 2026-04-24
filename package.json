@@ -1,12 +1,16 @@
 {
   "name": "socket",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Local network messaging and transfer workspace",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "version:bump": "node scripts/bump-version.js",
+    "version:bump:dry": "node scripts/bump-version.js --dry-run",
+    "prebuild": "node scripts/bump-version.js",
     "build": "electron-builder build --win --publish never",
+    "predist": "node scripts/verify-release-env.js && node scripts/bump-version.js",
     "dist": "electron-builder build --win --publish always"
   },
   "build": {
@@ -16,7 +20,11 @@
       "icon": "img/socket_icon.png",
       "target": "nsis",
       "publish": [
-        "github"
+        {
+          "provider": "github",
+          "owner": "tarunod",
+          "repo": "shareit"
+        }
       ]
     },
     "nsis": {
@@ -27,7 +35,7 @@
     "publish": {
       "provider": "github",
       "owner": "tarunod",
-      "repo": "socket"
+      "repo": "shareit"
     }
   },
   "keywords": [

@@ -21,6 +21,11 @@ function getInitialData() {
       avatarStyle: 'adventurer',
       avatarSeed: null,
       notificationSoundEnabled: true,
+      autoAcceptTransfers: false,
+      autoCheckUpdates: true,
+      autoDownloadUpdates: true,
+      ignoredUpdateVersion: null,
+      lastUpdateCheckAt: null,
     },
     sharedFolders: [],
     receivedFolders: [],
@@ -199,6 +204,11 @@ const store = {
         avatarStyle: 'adventurer',
         avatarSeed: null,
         notificationSoundEnabled: true,
+        autoAcceptTransfers: false,
+        autoCheckUpdates: true,
+        autoDownloadUpdates: true,
+        ignoredUpdateVersion: null,
+        lastUpdateCheckAt: null,
       };
       changed = true;
     }
@@ -207,13 +217,23 @@ const store = {
       avatarStyle: 'adventurer',
       avatarSeed: null,
       notificationSoundEnabled: true,
+      autoAcceptTransfers: false,
+      autoCheckUpdates: true,
+      autoDownloadUpdates: true,
+      ignoredUpdateVersion: null,
+      lastUpdateCheckAt: null,
       ...data.settings,
     };
     if (
       merged.masterFolder !== data.settings.masterFolder ||
       merged.avatarStyle !== data.settings.avatarStyle ||
       merged.avatarSeed !== data.settings.avatarSeed ||
-      merged.notificationSoundEnabled !== data.settings.notificationSoundEnabled
+      merged.notificationSoundEnabled !== data.settings.notificationSoundEnabled ||
+      merged.autoAcceptTransfers !== data.settings.autoAcceptTransfers ||
+      merged.autoCheckUpdates !== data.settings.autoCheckUpdates ||
+      merged.autoDownloadUpdates !== data.settings.autoDownloadUpdates ||
+      merged.ignoredUpdateVersion !== data.settings.ignoredUpdateVersion ||
+      merged.lastUpdateCheckAt !== data.settings.lastUpdateCheckAt
     ) {
       changed = true;
     }

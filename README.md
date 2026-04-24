@@ -56,6 +56,35 @@ npm run build
 
 Build and packaging are not run automatically in this repo. Run them manually when you want to verify desktop packaging.
 
+## App Update Release Flow
+
+Socket updates are delivered through GitHub Releases using `electron-updater`.
+
+1. Push code changes.
+2. Set GitHub token in shell:
+   - PowerShell: `$env:GH_TOKEN="your_token"`
+3. Run release publish:
+   - `npm run dist`
+4. `predist` now validates release config/token and auto-bumps app version before publish.
+5. A GitHub Release with update artifacts is published.
+6. Client apps detect the new version using Settings `Check now` or periodic auto-check.
+7. If auto-download is enabled, the update downloads automatically; otherwise users can click `Download update`.
+8. When status becomes ready, users click `Install update` (or install on app quit).
+
+If users skip a version, they can clear the skipped version from Settings.
+
+### Versioning Automation
+
+- `npm run build` auto-bumps app version before packaging.
+- `npm run dist` auto-bumps app version before publish.
+- Dry-run preview of next version:
+  - `npm run version:bump:dry`
+- Manual bump helper:
+  - `npm run version:bump`
+- Optional bump type override:
+  - `BUMP_PART=minor npm run version:bump`
+  - `BUMP_PART=major npm run version:bump`
+
 ## Local Storage
 
 - Application data: `%USERPROFILE%\\.socket`

@@ -109,6 +109,32 @@ class SyncManager {
       logger.info('Sync', `Starting sync for folder ${folder.name} from ${baseUrl}`);
       const fileList = await this.fetchJSON(`${baseUrl}/list/${folder.id}`);
       const files = fileList.files || [];
+      const filesToSync = files.filter((file) => {
+        const targetFile = path.join(targetDir, file.path.replace(/\//g, path.sep));
+        return this.needsSync(targetFile, file);
+      });
+
+      if (filesToSync.length === 0) {
+        const existing = this.progress.get(folder.id) || {
+          folderId: folder.id,
+          folderName: folder.name,
+          total: files.length,
+          done: files.length,
+          syncedFiles: [],
+        };
+        this.progress.set(folder.id, {
+          ...existing,
+          total: files.length,
+          done: files.length,
+          status: 'synced',
+          percent: 100,
+          currentFile: null,
+          lastSync: Date.now(),
+        });
+        this.emitProgress(folder.id);
+        return;
+      }
+
       store.upsertTransfer({
         id: `sync:${folder.id}`,
         kind: 'sync',
@@ -119,11 +145,17 @@ class SyncManager {
         percent: 0,
       });
       this.notifySyncMilestone(folder, 'syncing', `Sync started for ${folder.name}`);
+      store.addSystemMessage({
+        peer: folder.ownerInfo,
+        text: `Sync started for ${folder.name}.`,
+        meta: { kind: 'sync-status', folderId: folder.id, status: 'syncing' },
+      });
+      this.mainWindow.webContents.send('conversation-updated', store.getConversations());
 
       this.progress.set(folder.id, {
         folderId: folder.id,
         folderName: folder.name,
-        total: files.length,
+        total: filesToSync.length,
         done: 0,
         status: 'syncing',
         percent: 0,
@@ -133,29 +165,25 @@ class SyncManager {
       this.emitProgress(folder.id);
 
       let done = 0;
-      for (const file of files) {
+      for (const file of filesToSync) {
         const targetFile = path.join(targetDir, file.path.replace(/\//g, path.sep));
-        const needsSync = this.needsSync(targetFile, file);
-
-        if (needsSync) {
-          logger.info('Sync', `Downloading file ${file.path} to ${targetFile}`);
-          const pData = this.progress.get(folder.id);
-          pData.currentFile = { name: file.path, size: file.size, source: baseUrl };
-          this.emitProgress(folder.id);
-          
-          const encodedPath = file.path.split('/').map(encodeURIComponent).join('/');
-          await this.downloadFile(`${baseUrl}/file/${folder.id}/${encodedPath}`, targetFile);
-          
-          pData.syncedFiles.push(pData.currentFile);
-          pData.currentFile = null;
-        }
+        logger.info('Sync', `Downloading file ${file.path} to ${targetFile}`);
+        const pData = this.progress.get(folder.id);
+        pData.currentFile = { name: file.path, size: file.size, source: baseUrl };
+        this.emitProgress(folder.id);
+        
+        const encodedPath = file.path.split('/').map(encodeURIComponent).join('/');
+        await this.downloadFile(`${baseUrl}/file/${folder.id}/${encodedPath}`, targetFile);
+        
+        pData.syncedFiles.push(pData.currentFile);
+        pData.currentFile = null;
 
         done++;
-        const pData = this.progress.get(folder.id);
+        const nextData = this.progress.get(folder.id);
         this.progress.set(folder.id, {
-          ...pData,
+          ...nextData,
           done,
-          percent: Math.round((done / files.length) * 100),
+          percent: Math.round((done / filesToSync.length) * 100),
         });
         store.upsertTransfer({
           id: `sync:${folder.id}`,
@@ -164,7 +192,7 @@ class SyncManager {
           folderName: folder.name,
           peerName: folder.ownerInfo?.name || 'Unknown peer',
           status: 'syncing',
-          percent: Math.round((done / files.length) * 100),
+          percent: Math.round((done / filesToSync.length) * 100),
           currentFile: file.path,
         });
         this.emitProgress(folder.id);
@@ -189,6 +217,12 @@ class SyncManager {
         lastSync: Date.now(),
       });
       this.notifySyncMilestone(folder, 'synced', `Sync completed for ${folder.name}`);
+      store.addSystemMessage({
+        peer: folder.ownerInfo,
+        text: `Sync completed for ${folder.name}.`,
+        meta: { kind: 'sync-status', folderId: folder.id, status: 'synced' },
+      });
+      this.mainWindow.webContents.send('conversation-updated', store.getConversations());
       logger.info('Sync', `Completed sync for folder ${folder.name}`);
 
     } catch (err) {
@@ -209,6 +243,12 @@ class SyncManager {
         error: err.message,
       });
       this.notifySyncMilestone(folder, 'error', `Sync failed for ${folder.name}: ${err.message}`);
+      store.addSystemMessage({
+        peer: folder.ownerInfo,
+        text: `Sync failed for ${folder.name}: ${err.message}`,
+        meta: { kind: 'sync-status', folderId: folder.id, status: 'error', error: err.message },
+      });
+      this.mainWindow.webContents.send('conversation-updated', store.getConversations());
       this.emitProgress(folder.id);
     }
   }
@@ -265,6 +305,7 @@ class SyncManager {
 
   notifySyncMilestone(folder, status, message) {
     if (!this.notifyApp) return;
+    if (status !== 'error') return;
     if (this.lastNotifiedStatus.get(folder.id) === status) return;
     this.lastNotifiedStatus.set(folder.id, status);
     this.notifyApp({
@@ -272,6 +313,8 @@ class SyncManager {
       title: status === 'error' ? 'Sync error' : status === 'synced' ? 'Sync completed' : 'Sync started',
       message,
       level: status === 'error' ? 'error' : status === 'synced' ? 'success' : 'info',
+      dedupeKey: `sync:${folder.id}:${status}`,
+      dedupeMs: 60000,
     });
   }
 

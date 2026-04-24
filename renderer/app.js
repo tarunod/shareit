@@ -6,6 +6,10 @@ const state = {
     avatarStyle: 'adventurer',
     avatarSeed: null,
     notificationSoundEnabled: true,
+    autoCheckUpdates: true,
+    autoDownloadUpdates: true,
+    ignoredUpdateVersion: null,
+    lastUpdateCheckAt: null,
   },
   peers: [],
   conversations: [],
@@ -18,11 +22,25 @@ const state = {
   masterFolder: 'C:\\Socket',
   activeWorkspace: 'home',
   activeConversationId: null,
+  activeTransferSection: 'incoming',
   queuedAttachments: [],
+  messageDrafts: {},
   chatDropActive: false,
   bootstrapError: null,
   notificationsOpen: false,
   windowState: { isMaximized: false },
+  updateStatus: {
+    status: 'idle',
+    title: 'Up to date',
+    message: '',
+    progress: 0,
+    version: null,
+    releaseDate: null,
+    canDownload: false,
+    canInstall: false,
+    isSkipped: false,
+    checkedAt: null,
+  },
 };
 
 const DICEBEAR_STYLES = ['adventurer', 'avataaars', 'bottts', 'identicon', 'pixel-art'];
@@ -34,6 +52,7 @@ const toastStack = document.getElementById('toast-stack');
 const notificationAnchor = document.getElementById('notification-anchor');
 const notificationButton = document.getElementById('btn-notifications');
 const maximizeButton = document.getElementById('btn-maximize');
+const autoAcceptInFlight = new Set();
 
 function escapeHtml(value) {
   return String(value || '')
@@ -42,6 +61,68 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function renderInlineMarkdown(line) {
+  if (!line) return '';
+  const placeholders = [];
+  let text = line.replace(/`([^`]+)`/g, (_, code) => {
+    const token = `__CODE_${placeholders.length}__`;
+    placeholders.push(`<code>${escapeHtml(code)}</code>`);
+    return token;
+  });
+  text = text
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    .replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => (
+    `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">${label}</a>`
+  ));
+  text = text.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noreferrer noopener">$1</a>');
+  return text.replace(/__CODE_(\d+)__/g, (_, idx) => placeholders[Number(idx)] || '');
+}
+
+function renderMessageMarkdown(text) {
+  const source = String(text || '').replace(/\r\n/g, '\n');
+  if (!source.trim()) return '';
+
+  const codeBlocks = [];
+  const withoutBlocks = source.replace(/```([\s\S]*?)```/g, (_, code) => {
+    const token = `@@BLOCK_${codeBlocks.length}@@`;
+    codeBlocks.push(`<pre><code>${escapeHtml(code.trim())}</code></pre>`);
+    return token;
+  });
+
+  const lines = withoutBlocks.split('\n');
+  const html = [];
+  let listOpen = false;
+  for (const rawLine of lines) {
+    const line = escapeHtml(rawLine);
+    const listMatch = line.match(/^\s*[-*]\s+(.+)$/);
+    if (listMatch) {
+      if (!listOpen) {
+        html.push('<ul>');
+        listOpen = true;
+      }
+      html.push(`<li>${renderInlineMarkdown(listMatch[1])}</li>`);
+      continue;
+    }
+    if (listOpen) {
+      html.push('</ul>');
+      listOpen = false;
+    }
+    if (!line.trim()) {
+      html.push('<br/>');
+      continue;
+    }
+    if (/^@@BLOCK_\d+@@$/.test(line.trim())) {
+      html.push(line.trim());
+      continue;
+    }
+    html.push(`<p>${renderInlineMarkdown(line)}</p>`);
+  }
+  if (listOpen) html.push('</ul>');
+  return html.join('').replace(/@@BLOCK_(\d+)@@/g, (_, idx) => codeBlocks[Number(idx)] || '');
 }
 
 function initials(name) {
@@ -228,19 +309,6 @@ function getRecentEvents() {
     });
   }
 
-  for (const shared of state.sharedFolders) {
-    events.push({
-      id: `shared:${shared.id}`,
-      kind: shared.type === 'folder' ? 'folder' : 'file',
-      title: shared.name,
-      subtitle: `Shared with ${(shared.peers || []).length} peer${(shared.peers || []).length === 1 ? '' : 's'}`,
-      at: shared.sharedAt,
-      status: 'shared',
-      workspace: 'shared',
-      sharedId: shared.id,
-    });
-  }
-
   return events.sort((a, b) => (b.at || 0) - (a.at || 0));
 }
 
@@ -264,7 +332,7 @@ async function hydrate() {
   }
 
   state.currentUser = await api.getUserInfo();
-  const [settings, peers, conversations, inbox, transfers, sharedFolders, receivedFolders, syncProgress, masterFolder, windowState] = await Promise.all([
+  const [settings, peers, conversations, inbox, transfers, sharedFolders, receivedFolders, syncProgress, masterFolder, windowState, updateStatus] = await Promise.all([
     api.getSettings ? api.getSettings() : Promise.resolve({}),
     api.getPeers(),
     api.getConversations(),
@@ -275,12 +343,17 @@ async function hydrate() {
     api.getSyncProgress(),
     api.getMasterFolder(),
     api.getWindowState(),
+    api.getUpdateStatus ? api.getUpdateStatus() : Promise.resolve(null),
   ]);
 
   state.settings = {
     avatarStyle: 'adventurer',
     avatarSeed: null,
     notificationSoundEnabled: true,
+    autoCheckUpdates: true,
+    autoDownloadUpdates: true,
+    ignoredUpdateVersion: null,
+    lastUpdateCheckAt: null,
     ...(settings || {}),
   };
   state.peers = peers;
@@ -292,6 +365,10 @@ async function hydrate() {
   state.syncProgress = syncProgress;
   state.masterFolder = masterFolder;
   state.windowState = windowState || { isMaximized: false };
+  state.updateStatus = {
+    ...state.updateStatus,
+    ...(updateStatus || {}),
+  };
 
   const firstConversation = getPeerConversationEntries()[0];
   if (!state.activeConversationId && firstConversation) {
@@ -350,8 +427,7 @@ function renderLeftRail() {
     const navItems = [
       ['home', 'Home', 'home', 0],
       ['chats', 'Chats', 'chats', state.conversations.filter((item) => item.unreadCount).length],
-      ['transfers', 'Transfers', 'transfers', state.transfers.filter((item) => item.status === 'syncing').length],
-      ['shared', 'Shared', 'shared', state.sharedFolders.length],
+      ['transfers', 'Transfers', 'transfers', state.transfers.filter((item) => ['syncing', 'pending-request', 'pending-sync'].includes(item.status)).length],
     ];
 
     rail.innerHTML = `
@@ -483,7 +559,6 @@ function renderThreadRail() {
 
   const workspaceSummaries = {
     transfers: ['Transfers', state.transfers.length || Object.keys(state.syncProgress).length, 'Recent sync and share activity'],
-    shared: ['Shared', state.sharedFolders.length, 'Items you are sharing'],
   };
 
   const [title, count, subtitle] = workspaceSummaries[state.activeWorkspace] || ['Workspace', 0, ''];
@@ -513,8 +588,56 @@ function renderActivityRow(event) {
   `;
 }
 
+function renderSystemMessageCard(message) {
+  const kind = message?.meta?.kind || '';
+  const requestId = message?.meta?.requestId;
+  const folderName = message?.meta?.request?.folderName || message?.meta?.folderName || message?.text || 'Request';
+  const pending = requestId ? state.inbox.find((item) => item.id === requestId && item.status === 'pending') : null;
+  if (kind === 'access-request') {
+    return `
+      <div class="message-card request-card">
+        <div class="message-card-copy">
+          <strong>Share request</strong>
+          <small>${escapeHtml(folderName)}</small>
+        </div>
+        <div class="message-card-actions">
+          ${pending ? `<button class="inline-action success" data-accept-request="${pending.id}" type="button" title="Accept">${icon('accept')}</button>
+          <button class="inline-action" data-reject-request="${pending.id}" type="button" title="Deny">${icon('close')}</button>` : '<span class="message-status-chip">Handled</span>'}
+        </div>
+      </div>
+    `;
+  }
+  if (kind === 'access-response') {
+    return `
+      <div class="message-card">
+        <div class="message-card-copy">
+          <strong>${message?.meta?.accepted ? 'Share accepted' : 'Share declined'}</strong>
+          <small>${escapeHtml(folderName)}</small>
+        </div>
+        <span class="message-status-chip ${message?.meta?.accepted ? 'success' : ''}">${message?.meta?.accepted ? 'Accepted' : 'Declined'}</span>
+      </div>
+    `;
+  }
+  if (kind === 'sync-status') {
+    const status = message?.meta?.status || 'syncing';
+    const statusLabel = status === 'synced' ? 'Completed' : status === 'error' ? 'Failed' : 'In progress';
+    return `
+      <div class="message-card">
+        <div class="message-card-copy">
+          <strong>Sync update</strong>
+          <small>${escapeHtml(message.text || '')}</small>
+        </div>
+        <span class="message-status-chip ${status === 'synced' ? 'success' : status === 'error' ? 'danger' : ''}">${statusLabel}</span>
+      </div>
+    `;
+  }
+  return '';
+}
+
 function renderMessageRow(message, conversation) {
   const sender = message.direction === 'outgoing' ? 'You' : message.direction === 'incoming' ? conversation.peerName : 'System';
+  const systemCard = message.direction === 'system' ? renderSystemMessageCard(message) : '';
+  const skipTextForCard = systemCard && ['access-request', 'access-response', 'sync-status'].includes(message?.meta?.kind || '');
   return `
     <article class="message-row ${message.direction === 'outgoing' ? 'outgoing' : message.direction === 'incoming' ? 'incoming' : 'system'}">
       <div class="message-bubble">
@@ -522,7 +645,8 @@ function renderMessageRow(message, conversation) {
           <strong>${escapeHtml(sender)}</strong>
           <span>${formatTime(message.createdAt, true)}</span>
         </div>
-        ${message.text ? `<p>${escapeHtml(message.text)}</p>` : ''}
+        ${systemCard}
+        ${message.text && !skipTextForCard ? `<div class="markdown-body">${renderMessageMarkdown(message.text)}</div>` : ''}
         ${(message.attachments || []).length ? `
           <div class="attachment-list">
             ${message.attachments.map((attachment) => `
@@ -615,6 +739,7 @@ function renderChatWorkspace() {
   }
 
   const online = isPeerOnline(conversation.peerId);
+  const draft = state.messageDrafts[conversation.id] || '';
   return `
     <section class="workspace-shell chat-shell ${state.chatDropActive && online ? 'drop-active' : ''}">
       <header class="workspace-header">
@@ -622,7 +747,7 @@ function renderChatWorkspace() {
           <div class="presence-avatar">${initials(conversation.peerName)}</div>
           <div>
             <strong>${escapeHtml(conversation.peerName)}</strong>
-            <span>${online ? 'Online' : 'Offline'}${conversation.peerIp ? ` • ${escapeHtml(conversation.peerIp)}` : ''}</span>
+            <span>${online ? 'Online' : 'Offline'}${conversation.peerIp ? ` - ${escapeHtml(conversation.peerIp)}` : ''}</span>
           </div>
         </div>
         <div class="workspace-header-actions">
@@ -646,7 +771,7 @@ function renderChatWorkspace() {
             </div>
           ` : ''}
           <section class="composer-shell ${online ? '' : 'disabled'}">
-            <textarea id="message-input" placeholder="${online ? `Message ${escapeHtml(conversation.peerName)}` : `${escapeHtml(conversation.peerName)} is offline`}" ${online ? '' : 'disabled'}></textarea>
+            <textarea id="message-input" placeholder="${online ? `Message ${escapeHtml(conversation.peerName)} (Markdown supported)` : `${escapeHtml(conversation.peerName)} is offline`}" ${online ? '' : 'disabled'}>${escapeHtml(draft)}</textarea>
             <div class="composer-actions">
               <div class="queued-summary">${online ? (state.queuedAttachments.length ? `${state.queuedAttachments.length} queued` : 'Ready') : 'Unavailable while offline'}</div>
               <button class="primary-btn compact-send" data-action="send-message" type="button" ${online ? '' : 'disabled'}>
@@ -662,43 +787,73 @@ function renderChatWorkspace() {
   `;
 }
 
-function renderTransfersWorkspace() {
-  const progressEntries = Object.values(state.syncProgress || {});
-  const items = state.transfers.length ? state.transfers : progressEntries;
+function getTransferSections() {
+  const incoming = [];
+  const outgoing = [];
+
+  for (const transfer of state.transfers || []) {
+    const direction = transfer.direction || (transfer.kind === 'sync' || transfer.kind === 'incoming-share' ? 'incoming' : 'outgoing');
+    if (direction === 'incoming') incoming.push(transfer);
+    else outgoing.push(transfer);
+  }
+
+  for (const shared of state.sharedFolders || []) {
+    if (outgoing.some((item) => item.id === shared.id)) continue;
+    outgoing.push({
+      id: shared.id,
+      kind: 'share',
+      folderId: shared.id,
+      folderName: shared.name,
+      status: 'shared',
+      percent: 100,
+      resourceType: shared.type,
+      peerName: `${(shared.peers || []).length} peer${(shared.peers || []).length === 1 ? '' : 's'}`,
+      createdAt: shared.sharedAt,
+      updatedAt: shared.sharedAt,
+      direction: 'outgoing',
+      isSharedRecord: true,
+    });
+  }
+
+  incoming.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  outgoing.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  return { incoming, outgoing };
+}
+
+function renderTransferCard(item) {
+  const isIncoming = (item.direction || (item.kind === 'sync' || item.kind === 'incoming-share' ? 'incoming' : 'outgoing')) === 'incoming';
+  const iconName = item.resourceType === 'folder' ? 'folder' : item.resourceType === 'file' ? 'file' : 'transfers';
+  const label = item.folderName || item.file || 'Transfer';
+  const subtitle = item.peerName || item.status || 'pending';
+  const status = (item.status || 'pending').replace(/-/g, ' ');
   return `
-    <section class="workspace-shell">
-      <header class="workspace-header simple"><strong>Transfers</strong></header>
-      <div class="stack-list">
-        ${items.length ? items.map((item) => `
-          <article class="stack-card">
-            <div class="stack-top">
-              <span class="stack-icon">${icon(item.resourceType === 'folder' ? 'folder' : 'transfers')}</span>
-              <strong>${escapeHtml(item.folderName || item.file || 'Transfer')}</strong>
-              <small>${escapeHtml(item.status || 'pending')}</small>
-            </div>
-            <div class="progress-shell"><div class="progress-fill" style="width:${Math.max(6, item.percent || 0)}%"></div></div>
-          </article>
-        `).join('') : `<div class="thread-empty compact-empty"><p>No transfers</p></div>`}
+    <article class="stack-card">
+      <div class="stack-top">
+        <span class="stack-icon">${icon(iconName)}</span>
+        <strong>${escapeHtml(label)}</strong>
+        <small>${escapeHtml(status)}</small>
       </div>
-    </section>
+      <small>${escapeHtml(subtitle)}</small>
+      <div class="progress-shell"><div class="progress-fill ${isIncoming ? 'incoming-fill' : 'outgoing-fill'}" style="width:${Math.max(4, item.percent || 0)}%"></div></div>
+      ${item.isSharedRecord ? `<div class="stack-actions horizontal-actions"><button class="inline-action" data-stop-share="${item.id}" type="button" title="Stop sharing">${icon('close')}</button></div>` : ''}
+    </article>
   `;
 }
 
-function renderSharedWorkspace() {
+function renderTransfersWorkspace() {
+  const sections = getTransferSections();
+  const items = state.activeTransferSection === 'outgoing' ? sections.outgoing : sections.incoming;
   return `
     <section class="workspace-shell">
-      <header class="workspace-header simple"><strong>Shared</strong></header>
+      <header class="workspace-header simple transfer-header">
+        <strong>Transfers</strong>
+        <div class="section-switch" role="tablist" aria-label="Transfer sections">
+          <button class="section-tab ${state.activeTransferSection === 'incoming' ? 'active' : ''}" data-transfer-section="incoming" type="button">Incoming (${sections.incoming.length})</button>
+          <button class="section-tab ${state.activeTransferSection === 'outgoing' ? 'active' : ''}" data-transfer-section="outgoing" type="button">Outgoing (${sections.outgoing.length})</button>
+        </div>
+      </header>
       <div class="stack-list">
-        ${state.sharedFolders.length ? state.sharedFolders.map((item) => `
-          <article class="stack-card">
-            <div class="stack-top">
-              <span class="stack-icon">${icon(item.type === 'folder' ? 'folder' : 'file')}</span>
-              <strong>${escapeHtml(item.name)}</strong>
-              <button class="inline-action" data-stop-share="${item.id}" type="button" title="Stop sharing">${icon('close')}</button>
-            </div>
-            <small>${(item.peers || []).length} peers</small>
-          </article>
-        `).join('') : `<div class="thread-empty compact-empty"><p>No shared items</p></div>`}
+        ${items.length ? items.map(renderTransferCard).join('') : `<div class="thread-empty compact-empty"><p>No ${state.activeTransferSection} transfers</p></div>`}
       </div>
     </section>
   `;
@@ -750,10 +905,45 @@ function renderSettingsWorkspace() {
             <strong>Device</strong>
             <small>Current node details</small>
           </div>
-          <label class="settings-toggle">
-            <input id="settings-notification-sound" type="checkbox" ${state.settings.notificationSoundEnabled === false ? '' : 'checked'} />
-            <span>Notification sound</span>
-          </label>
+          <div class="settings-control-list">
+            <label class="settings-toggle">
+              <input id="settings-notification-sound" type="checkbox" ${state.settings.notificationSoundEnabled === false ? '' : 'checked'} />
+              <span>Notification sound</span>
+            </label>
+            <label class="settings-toggle">
+              <input id="settings-auto-accept" type="checkbox" ${state.settings.autoAcceptTransfers ? 'checked' : ''} />
+              <span>Auto-accept incoming transfers</span>
+            </label>
+            <label class="settings-toggle">
+              <input id="settings-auto-update-check" type="checkbox" ${state.settings.autoCheckUpdates === false ? '' : 'checked'} />
+              <span>Auto-check for updates</span>
+            </label>
+            <label class="settings-toggle">
+              <input id="settings-auto-update-download" type="checkbox" ${state.settings.autoDownloadUpdates === false ? '' : 'checked'} />
+              <span>Auto-download updates</span>
+            </label>
+          </div>
+          <div class="settings-update-box">
+            <div class="settings-update-head">
+              <strong>${escapeHtml(state.updateStatus.title || 'Updates')}</strong>
+              <span class="update-state-chip">${escapeHtml(state.updateStatus.status || 'idle')}</span>
+            </div>
+            <small>${escapeHtml(state.updateStatus.message || '')}</small>
+            <div class="settings-update-meta">
+              <small>Version: ${state.updateStatus.version ? `v${escapeHtml(state.updateStatus.version)}` : 'n/a'}</small>
+              <small>Last checked: ${state.settings.lastUpdateCheckAt ? formatTime(state.settings.lastUpdateCheckAt, true) : 'Never'}</small>
+              ${state.updateStatus.releaseDate ? `<small>Release date: ${formatTime(state.updateStatus.releaseDate, true)}</small>` : ''}
+              ${typeof state.updateStatus.progress === 'number' && state.updateStatus.status === 'downloading' ? `<small>Progress: ${Math.round(state.updateStatus.progress)}%</small>` : ''}
+              ${state.settings.ignoredUpdateVersion ? `<small>Skipped: v${escapeHtml(state.settings.ignoredUpdateVersion)}</small>` : ''}
+            </div>
+            <div class="settings-actions split-actions">
+              <button class="secondary-btn" data-action="check-updates" type="button">Check now</button>
+              ${state.updateStatus.canDownload ? '<button class="secondary-btn" data-action="download-update" type="button">Download update</button>' : ''}
+              ${state.updateStatus.canInstall ? '<button class="primary-btn" data-action="install-update" type="button">Install update</button>' : ''}
+              ${state.updateStatus.version ? '<button class="secondary-btn" data-action="skip-update" type="button">Skip this version</button>' : ''}
+              ${state.settings.ignoredUpdateVersion ? '<button class="secondary-btn" data-action="clear-skip-update" type="button">Clear skipped version</button>' : ''}
+            </div>
+          </div>
           <div class="settings-meta">
             <div><span>${icon('home')}</span><small>${escapeHtml(state.currentUser?.hostname || '')}</small></div>
             <div><span>${icon('chats')}</span><small>${escapeHtml(state.currentUser?.id || '')}</small></div>
@@ -762,6 +952,36 @@ function renderSettingsWorkspace() {
       </div>
     </section>
   `;
+}
+
+function bindComposerHandlers() {
+  const input = document.getElementById('message-input');
+  const conversation = getActiveConversation();
+  if (!input || !conversation || input.dataset.bound === '1') return;
+  input.dataset.bound = '1';
+  input.addEventListener('input', () => {
+    state.messageDrafts[conversation.id] = input.value;
+  });
+  input.addEventListener('paste', async (event) => {
+    const conversationNow = getActiveConversation();
+    if (!conversationNow || !isPeerOnline(conversationNow.peerId)) return;
+    const items = Array.from(event.clipboardData?.items || []);
+    const imageItem = items.find((item) => item.type && item.type.startsWith('image/'));
+    if (!imageItem || !api.savePastedImage) return;
+    const file = imageItem.getAsFile();
+    if (!file) return;
+
+    event.preventDefault();
+    const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+    const savedPath = await api.savePastedImage({ bytes, mimeType: file.type });
+    if (!savedPath) {
+      toast('Unable to paste image', 'error');
+      return;
+    }
+    const added = await queueAttachmentPaths([savedPath]);
+    renderStage();
+    if (added > 0) toast('Image pasted as attachment', 'success');
+  });
 }
 
 function renderStage() {
@@ -776,14 +996,11 @@ function renderStage() {
   }
   if (state.activeWorkspace === 'chats') {
     stage.innerHTML = renderChatWorkspace();
+    bindComposerHandlers();
     return;
   }
   if (state.activeWorkspace === 'transfers') {
     stage.innerHTML = renderTransfersWorkspace();
-    return;
-  }
-  if (state.activeWorkspace === 'shared') {
-    stage.innerHTML = renderSharedWorkspace();
     return;
   }
   stage.innerHTML = renderSettingsWorkspace();
@@ -818,6 +1035,28 @@ function renderConversationShell() {
   notificationButton.classList.toggle('active', state.notificationsOpen);
 }
 
+function renderWithComposerPreserved(renderFn) {
+  const input = document.getElementById('message-input');
+  const conversation = getActiveConversation();
+  const hadFocus = !!input && document.activeElement === input;
+  const selectionStart = input && typeof input.selectionStart === 'number' ? input.selectionStart : null;
+  const selectionEnd = input && typeof input.selectionEnd === 'number' ? input.selectionEnd : null;
+  if (input && conversation) {
+    state.messageDrafts[conversation.id] = input.value;
+  }
+
+  renderFn();
+
+  const restored = document.getElementById('message-input');
+  if (restored && hadFocus) {
+    restored.focus();
+    if (selectionStart !== null && selectionEnd !== null) {
+      const max = restored.value.length;
+      restored.setSelectionRange(Math.min(selectionStart, max), Math.min(selectionEnd, max));
+    }
+  }
+}
+
 async function refreshSharedState() {
   const [sharedFolders, receivedFolders, transfers, syncProgress, inbox] = await Promise.all([
     api.getSharedFolders(),
@@ -831,6 +1070,23 @@ async function refreshSharedState() {
   state.transfers = transfers;
   state.syncProgress = syncProgress;
   state.inbox = inbox;
+}
+
+async function autoAcceptPendingRequests() {
+  if (!state.settings.autoAcceptTransfers) return;
+  const pending = state.inbox.filter((item) => item.status === 'pending' && item.request);
+  for (const item of pending) {
+    if (autoAcceptInFlight.has(item.id)) continue;
+    autoAcceptInFlight.add(item.id);
+    try {
+      await api.acceptAccess(item.request);
+      toast(`Auto-accepted ${item.folderName}`, 'success');
+    } catch (error) {
+      toast(`Auto-accept failed for ${item.folderName}`, 'error');
+    } finally {
+      autoAcceptInFlight.delete(item.id);
+    }
+  }
 }
 
 async function openWorkspace(workspace) {
@@ -951,6 +1207,7 @@ document.body.addEventListener('click', async (event) => {
       text,
       attachments: state.queuedAttachments.map((item) => item.path),
     });
+    state.messageDrafts[conversation.id] = '';
     state.queuedAttachments = [];
     await refreshSharedState();
     state.conversations = await api.getConversations();
@@ -964,10 +1221,16 @@ document.body.addEventListener('click', async (event) => {
     const name = document.getElementById('settings-name')?.value?.trim();
     const avatarStyle = document.getElementById('settings-avatar-style')?.value || state.settings.avatarStyle;
     const soundEnabled = !!document.getElementById('settings-notification-sound')?.checked;
+    const autoAcceptTransfers = !!document.getElementById('settings-auto-accept')?.checked;
+    const autoCheckUpdates = !!document.getElementById('settings-auto-update-check')?.checked;
+    const autoDownloadUpdates = !!document.getElementById('settings-auto-update-download')?.checked;
     if (!name) return;
     await api.setSettings({
       avatarStyle,
       notificationSoundEnabled: soundEnabled,
+      autoAcceptTransfers,
+      autoCheckUpdates,
+      autoDownloadUpdates,
     });
     state.settings = await api.getSettings();
     await api.setUserInfo({ name });
@@ -983,6 +1246,9 @@ document.body.addEventListener('click', async (event) => {
       avatarStyle,
       avatarSeed: generateAvatarSeed(),
       notificationSoundEnabled: !!document.getElementById('settings-notification-sound')?.checked,
+      autoAcceptTransfers: !!document.getElementById('settings-auto-accept')?.checked,
+      autoCheckUpdates: !!document.getElementById('settings-auto-update-check')?.checked,
+      autoDownloadUpdates: !!document.getElementById('settings-auto-update-download')?.checked,
     });
     state.settings = await api.getSettings();
     state.currentUser = await api.getUserInfo();
@@ -1008,6 +1274,56 @@ document.body.addEventListener('click', async (event) => {
     return;
   }
 
+  const transferSectionButton = event.target.closest('[data-transfer-section]');
+  if (transferSectionButton) {
+    state.activeTransferSection = transferSectionButton.dataset.transferSection === 'outgoing' ? 'outgoing' : 'incoming';
+    renderStage();
+    return;
+  }
+
+  if (event.target.closest('[data-action="check-updates"]')) {
+    if (api.checkForUpdates) {
+      await api.checkForUpdates({ force: true });
+      state.settings = await api.getSettings();
+      toast('Checking for updates', 'info');
+      renderStage();
+    }
+    return;
+  }
+
+  if (event.target.closest('[data-action="download-update"]')) {
+    if (api.downloadUpdate) {
+      await api.downloadUpdate();
+      toast('Downloading update', 'info');
+    }
+    return;
+  }
+
+  if (event.target.closest('[data-action="install-update"]')) {
+    if (api.quitAndInstall) await api.quitAndInstall();
+    return;
+  }
+
+  if (event.target.closest('[data-action="skip-update"]')) {
+    if (api.skipUpdateVersion && state.updateStatus.version) {
+      await api.skipUpdateVersion(state.updateStatus.version);
+      state.settings = await api.getSettings();
+      toast(`Skipped version ${state.updateStatus.version}`, 'info');
+      renderStage();
+    }
+    return;
+  }
+
+  if (event.target.closest('[data-action="clear-skip-update"]')) {
+    if (api.skipUpdateVersion) {
+      await api.skipUpdateVersion(null);
+      state.settings = await api.getSettings();
+      toast('Cleared skipped version', 'info');
+      renderStage();
+    }
+    return;
+  }
+
   const acceptButton = event.target.closest('[data-accept-request]');
   if (acceptButton) {
     const item = state.inbox.find((entry) => entry.id === acceptButton.dataset.acceptRequest);
@@ -1016,7 +1332,7 @@ document.body.addEventListener('click', async (event) => {
     await refreshSharedState();
     state.conversations = await api.getConversations();
     await loadConversationMessages();
-    renderAll();
+    renderWithComposerPreserved(() => renderAll());
     toast('Accepted', 'success');
     return;
   }
@@ -1028,7 +1344,7 @@ document.body.addEventListener('click', async (event) => {
     await api.rejectAccess(item.request);
     await refreshSharedState();
     state.conversations = await api.getConversations();
-    renderAll();
+    renderWithComposerPreserved(() => renderAll());
     toast('Rejected', 'info');
     return;
   }
@@ -1104,6 +1420,28 @@ document.body.addEventListener('change', async (event) => {
     await api.setSettings({ notificationSoundEnabled: enabled });
     state.settings = await api.getSettings();
     toast(`Notification sound ${enabled ? 'enabled' : 'disabled'}`, 'info');
+    return;
+  }
+  if (event.target.id === 'settings-auto-accept') {
+    const enabled = !!event.target.checked;
+    await api.setSettings({ autoAcceptTransfers: enabled });
+    state.settings = await api.getSettings();
+    toast(`Auto-accept ${enabled ? 'enabled' : 'disabled'}`, 'info');
+    if (enabled) await autoAcceptPendingRequests();
+    return;
+  }
+  if (event.target.id === 'settings-auto-update-check') {
+    const enabled = !!event.target.checked;
+    await api.setSettings({ autoCheckUpdates: enabled });
+    state.settings = await api.getSettings();
+    toast(`Auto update check ${enabled ? 'enabled' : 'disabled'}`, 'info');
+    return;
+  }
+  if (event.target.id === 'settings-auto-update-download') {
+    const enabled = !!event.target.checked;
+    await api.setSettings({ autoDownloadUpdates: enabled });
+    state.settings = await api.getSettings();
+    toast(`Auto update download ${enabled ? 'enabled' : 'disabled'}`, 'info');
   }
 });
 
@@ -1119,7 +1457,7 @@ api.on('peers-updated', async (peers) => {
 
 api.on('peer-presence-updated', async (peers) => {
   state.peers = peers;
-  renderConversationShell();
+  renderWithComposerPreserved(() => renderConversationShell());
 });
 
 api.on('conversation-updated', async (conversations) => {
@@ -1127,7 +1465,7 @@ api.on('conversation-updated', async (conversations) => {
   if (state.activeConversationId) {
     await loadConversationMessages();
   }
-  renderConversationShell();
+  renderWithComposerPreserved(() => renderConversationShell());
 });
 
 api.on('message-received', async () => {
@@ -1137,32 +1475,36 @@ api.on('message-received', async () => {
     state.activeConversationId = first?.id || null;
   }
   await loadConversationMessages();
-  renderConversationShell();
+  renderWithComposerPreserved(() => renderConversationShell());
 });
 
 api.on('transfer-updated', async (transfers) => {
   state.transfers = Array.isArray(transfers) ? transfers : await api.getTransfers();
   state.syncProgress = await api.getSyncProgress();
   renderRailAndNotifications();
-  if (state.activeWorkspace === 'home' || state.activeWorkspace === 'transfers' || state.activeWorkspace === 'shared') {
+  if (state.activeWorkspace === 'home' || state.activeWorkspace === 'transfers') {
     renderStage();
   }
 });
 
-api.on('inbox-updated', (inbox) => {
+api.on('inbox-updated', async (inbox) => {
   state.inbox = inbox;
-  renderConversationShell();
+  renderRailAndNotifications();
+  if (state.activeWorkspace === 'home') renderStage();
+  await autoAcceptPendingRequests();
 });
 
 api.on('access-accepted', async () => {
   await refreshSharedState();
   state.conversations = await api.getConversations();
-  renderConversationShell();
+  renderRailAndNotifications();
+  if (state.activeWorkspace === 'home' || state.activeWorkspace === 'transfers') renderStage();
 });
 
 api.on('access-rejected', async () => {
   state.conversations = await api.getConversations();
-  renderConversationShell();
+  renderRailAndNotifications();
+  if (state.activeWorkspace === 'home' || state.activeWorkspace === 'transfers') renderStage();
 });
 
 api.on('sync-progress', async (progress) => {
@@ -1171,7 +1513,7 @@ api.on('sync-progress', async (progress) => {
     renderNotificationPopup();
     notificationButton.classList.toggle('active', state.notificationsOpen);
   }
-  if (state.activeWorkspace === 'home' || state.activeWorkspace === 'transfers' || state.activeWorkspace === 'shared') {
+  if (state.activeWorkspace === 'home' || state.activeWorkspace === 'transfers') {
     renderStage();
   }
 });
@@ -1191,8 +1533,26 @@ api.on('window-state-changed', (windowState) => {
   setWindowIcons();
 });
 
+api.on('update-status', (updateStatus) => {
+  state.updateStatus = {
+    ...state.updateStatus,
+    ...(updateStatus || {}),
+  };
+  if (updateStatus?.checkedAt) {
+    state.settings = {
+      ...state.settings,
+      lastUpdateCheckAt: updateStatus.checkedAt,
+    };
+  }
+  if (state.activeWorkspace === 'settings') {
+    renderStage();
+  }
+});
+
 hydrate().catch((error) => {
   console.error('Failed to hydrate Socket renderer:', error);
   state.bootstrapError = error.message || String(error);
   renderAll();
 });
+
+
