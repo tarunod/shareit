@@ -41,6 +41,11 @@ class PeerDiscovery {
         if (data.id === myInfo.id) return;
 
         const existing = this.peers.get(data.id);
+        const hasChanged = !existing || 
+          existing.name !== data.name || 
+          existing.avatar !== data.avatar || 
+          existing.port !== data.port;
+
         this.peers.set(data.id, {
           ...existing,
           ...data,
@@ -48,9 +53,11 @@ class PeerDiscovery {
           lastSeen: Date.now(),
         });
 
-        store.upsertPeerConversation(this.peers.get(data.id));
-        this.emitPresenceUpdate();
-        if (this.onPeerAvailable) this.onPeerAvailable(this.peers.get(data.id));
+        if (hasChanged) {
+          store.upsertPeerConversation(this.peers.get(data.id));
+          this.emitPresenceUpdate(!existing);
+          if (this.onPeerAvailable) this.onPeerAvailable(this.peers.get(data.id));
+        }
 
         if (!existing) {
           if (this.notifyApp) {
@@ -77,11 +84,10 @@ class PeerDiscovery {
     this.cleanupTimer = setInterval(() => this.cleanupPeers(), 5000);
   }
 
-  emitPresenceUpdate() {
+  emitPresenceUpdate(includePeerList = false) {
     const peers = this.getPeers();
-    this.mainWindow.webContents.send('peers-updated', peers);
+    if (includePeerList) this.mainWindow.webContents.send('peers-updated', peers);
     this.mainWindow.webContents.send('peer-presence-updated', peers);
-    this.mainWindow.webContents.send('conversation-updated', store.getConversations());
   }
 
   broadcast() {
@@ -131,7 +137,7 @@ class PeerDiscovery {
         changed = true;
       }
     }
-    if (changed) this.emitPresenceUpdate();
+    if (changed) this.emitPresenceUpdate(true);
   }
 
   getPeers() {
@@ -205,7 +211,10 @@ class PeerDiscovery {
     const userInfo = store.getUserInfo();
     for (const peerId of peerIds) {
       const peer = this.peers.get(peerId);
-      if (!peer) continue;
+      if (!peer) {
+        logger.warn('Discovery', `Cannot send access request: Peer ${peerId} not in discovery map`);
+        continue;
+      }
 
       const socket = this.getPeerSocket(peer);
       const request = {
@@ -219,9 +228,16 @@ class PeerDiscovery {
         requestedAt: Date.now(),
       };
 
-      const emit = () => socket.emit('access-request', request);
+      logger.info('Discovery', `Sending access request for ${folder.name} to ${peer.name} (${peer.ip})`);
+      const emit = () => {
+        logger.info('Discovery', `Emitting access-request to socket for ${peer.name}`);
+        socket.emit('access-request', request);
+      };
       if (socket.connected) emit();
-      else socket.once('connect', emit);
+      else {
+        logger.info('Discovery', `Socket not connected for ${peer.name}, waiting for connect event...`);
+        socket.once('connect', emit);
+      }
     }
   }
 

@@ -192,8 +192,14 @@ function addAttachmentMessages(peer, sharedItems, deliveryStatus = 'requested') 
 function sendMessagePayload(payload) {
   const onlinePeer = peerDiscovery?.getPeerById(payload.peerId);
   const peer = onlinePeer || store.getPeerRecord(payload.peerId);
-  if (!peer) throw new Error('Selected peer is unknown');
+  if (!peer) {
+    logger.error('Outbox', `Attempted to send to unknown peer: ${payload.peerId}`);
+    throw new Error('Selected peer is unknown');
+  }
   const isOnline = !!onlinePeer;
+  const conversationId = getConversationId(peer.id);
+
+  logger.info('Outbox', `Sending payload to ${peer.name} (${peer.id}). Online: ${isOnline}`);
 
   if (payload.text && payload.text.trim()) {
     const message = store.addOutgoingMessage({
@@ -224,14 +230,19 @@ function sendMessagePayload(payload) {
 
   const attachmentPaths = payload.attachments || [];
   if (attachmentPaths.length > 0) {
+    logger.info('Outbox', `Queuing ${attachmentPaths.length} attachments for ${peer.name}`);
     const sharedItems = attachmentPaths.map((filePath) => createSharedItem(filePath, [peer.id], isOnline));
-    addAttachmentMessages(peer, sharedItems, isOnline ? 'requested' : 'queued');
+    const messages = addAttachmentMessages(peer, sharedItems, isOnline ? 'requested' : 'queued');
+    
     if (!isOnline) {
-      for (const item of sharedItems) {
+      for (let i = 0; i < sharedItems.length; i++) {
+        const item = sharedItems[i];
+        const message = messages[i];
         store.addOutboxItem({
           peerId: peer.id,
           kind: 'share',
           folderId: item.id,
+          messageId: message.id, // Added messageId to link back
           createdAt: Date.now(),
         });
       }
@@ -239,12 +250,14 @@ function sendMessagePayload(payload) {
   }
 
   emitConversations();
-  return { conversationId: getConversationId(peer.id) };
+  return { conversationId };
 }
 
 function flushQueuedForPeer(peer) {
   if (!peerDiscovery || !peer?.id) return;
   const queuedItems = store.getOutboxItems(peer.id);
+  const conversationId = getConversationId(peer.id);
+
   for (const item of queuedItems) {
     try {
       if (item.kind === 'text') {
@@ -256,6 +269,7 @@ function flushQueuedForPeer(peer) {
           createdAt: item.createdAt,
           meta: { deliveredFromQueue: true },
         });
+        store.updateMessageMeta(conversationId, item.messageId, { deliveryStatus: 'sent' });
         store.removeOutboxItem(item.id);
       }
       if (item.kind === 'share') {
@@ -265,6 +279,9 @@ function flushQueuedForPeer(peer) {
           continue;
         }
         peerDiscovery.sendAccessRequest(folder, [peer.id]);
+        if (item.messageId) {
+          store.updateMessageMeta(conversationId, item.messageId, { deliveryStatus: 'requested' });
+        }
         store.removeOutboxItem(item.id);
       }
     } catch (error) {
@@ -308,7 +325,16 @@ function fetchJSON(url) {
 
 function downloadFile(url, targetPath) {
   return requestURL(url, (response, resolve, reject) => {
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    const dir = path.dirname(targetPath);
+    // On Windows, mkdirSync can fail with EPERM on drive roots like 'D:\'
+    try {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    } catch (err) {
+      logger.warn('Download', `Failed to ensure directory ${dir}: ${err.message}`);
+    }
+    
     const file = fs.createWriteStream(targetPath);
     response.pipe(file);
     file.on('finish', () => {
@@ -436,28 +462,6 @@ function rejectAccessRequest(request) {
   emitInbox();
   emitConversations();
   return true;
-}
-
-async function promptForAccessRequest(request) {
-  if (!request?.requestId || promptedAccessRequests.has(request.requestId)) return;
-  promptedAccessRequests.add(request.requestId);
-
-  const senderName = request.ownerInfo?.name || 'A peer';
-  const options = {
-    type: 'question',
-    buttons: ['Accept', 'Later', 'Reject'],
-    defaultId: 0,
-    cancelId: 1,
-    title: 'Incoming file share',
-    message: `${senderName} wants to share "${request.folderName}" with you.`,
-    detail: 'Accept to choose where to save it, or handle it later from the app.',
-  };
-  const result = mainWindow && mainWindow.isVisible()
-    ? await dialog.showMessageBox(mainWindow, options)
-    : await dialog.showMessageBox(options);
-
-  if (result.response === 0) await acceptAccessRequest(request);
-  if (result.response === 2) rejectAccessRequest(request);
 }
 
 function registerHandlers() {
@@ -822,7 +826,7 @@ if (!gotTheLock) {
     registerHandlers();
     createWindow();
     createTray();
-    server = await createServer(mainWindow, notifyApp, promptForAccessRequest);
+    server = await createServer(mainWindow, notifyApp);
     peerDiscovery = new PeerDiscovery(mainWindow, server.port, notifyApp, flushQueuedForPeer);
     peerDiscovery.start();
     emitConversations();

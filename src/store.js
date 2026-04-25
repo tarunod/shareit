@@ -399,6 +399,20 @@ const store = {
     data.outbox = (data.outbox || []).filter((item) => item.id !== id);
     save();
   },
+
+  updateMessageMeta(conversationId, messageId, metaPatch) {
+    if (!data.messages[conversationId]) return false;
+    const messages = data.messages[conversationId];
+    const index = messages.findIndex((m) => m.id === messageId);
+    if (index === -1) return false;
+    
+    messages[index].meta = {
+      ...(messages[index].meta || {}),
+      ...metaPatch,
+    };
+    save();
+    return true;
+  },
 };
 
 module.exports = { store, getConversationId };

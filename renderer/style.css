@@ -352,8 +352,15 @@ svg {
 .left-rail {
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
   padding: 14px;
+}
+
+.rail-wrapper {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
+  flex: 1;
 }
 
 .rail-top,
@@ -684,6 +691,7 @@ svg {
 
 .main-stage {
   padding: 12px;
+  overflow: hidden;
 }
 
 .workspace-shell {
@@ -828,6 +836,12 @@ svg {
   white-space: nowrap;
 }
 
+.chat-layout {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+}
+
 .chat-layout.single-column {
   grid-template-columns: 1fr;
   flex: 1;
@@ -840,6 +854,7 @@ svg {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow: hidden;
 }
 
 .message-list {
@@ -1038,6 +1053,7 @@ svg {
 }
 
 .composer-shell {
+  flex: 0 0 auto;
   padding: 12px;
 }
 

@@ -146,7 +146,6 @@ function createServer(mainWindow, notifyApp, onAccessRequest) {
         });
         emitInboxState(mainWindow);
         emitConversationState(mainWindow);
-        if (onAccessRequest) onAccessRequest(requestWithHost);
         if (notifyApp) {
           notifyApp({
             type: 'request',

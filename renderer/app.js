@@ -25,6 +25,7 @@ const state = {
   bootstrapError: null,
   notificationsOpen: false,
   windowState: { isMaximized: false },
+  unreadCount: 0,
   updateStatus: {
     status: 'idle',
     title: 'Up to date',
@@ -132,17 +133,35 @@ function generateAvatarSeed() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function formatTime(value, withDay = false) {
+function formatTime(value, mode = 'time') {
   if (!value) return '';
-  return new Intl.DateTimeFormat('en-IN', withDay ? {
-    day: 'numeric',
-    month: 'short',
+  const date = new Date(value);
+  if (mode === 'day') {
+    return new Intl.DateTimeFormat('en-IN', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    }).format(date);
+  }
+  return new Intl.DateTimeFormat('en-IN', {
     hour: 'numeric',
     minute: '2-digit',
-  } : {
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(value));
+    hour12: true,
+  }).format(date);
+}
+
+function isSameDay(d1, d2) {
+  if (!d1 || !d2) return false;
+  const date1 = new Date(d1);
+  const date2 = new Date(d2);
+  return date1.getFullYear() === date2.getFullYear() &&
+         date1.getMonth() === date2.getMonth() &&
+         date1.getDate() === date2.getDate();
+}
+
+function isImageFile(filename) {
+  const ext = String(filename || '').split('.').pop().toLowerCase();
+  return ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext);
 }
 
 function icon(name) {
@@ -167,6 +186,7 @@ function icon(name) {
     open: '<path d="M14 4h6v6"/><path d="M10 14 20 4"/><path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     dot: '<circle cx="12" cy="12" r="3"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   };
 
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.dot}</svg>`;
@@ -220,6 +240,7 @@ function getPeerConversationEntries() {
         peerName: peer.name,
         peerHostname: peer.hostname,
         peerIp: peer.ip,
+        peerAvatar: peer.avatar,
         unreadCount: 0,
         lastMessageAt: 0,
         lastMessagePreview: '',
@@ -310,12 +331,7 @@ async function loadConversationMessages() {
   state.conversations = await api.getConversations();
 }
 
-function scrollMessagesToBottom() {
-  requestAnimationFrame(() => {
-    const list = document.querySelector('.message-list');
-    if (list) list.scrollTop = list.scrollHeight;
-  });
-}
+
 
 async function hydrate() {
   if (!api) {
@@ -383,8 +399,7 @@ function renderNotificationPopup() {
               </span>
               <span class="popover-item-time">${formatTime(item.at)}</span>
               <span class="popover-item-actions">
-                <button class="inline-action success" data-accept-request="${item.requestId}" type="button" title="Accept">${icon('accept')}</button>
-                <button class="inline-action" data-reject-request="${item.requestId}" type="button" title="Reject">${icon('close')}</button>
+                <button class="inline-action success" data-accept-request="${item.requestId}" type="button" title="Download">${icon('download')}</button>
               </span>
             </div>
           ` : `
@@ -415,27 +430,29 @@ function renderLeftRail() {
     ];
 
     rail.innerHTML = `
-      <div class="rail-top">
-        <div class="rail-nav rail-nav-expanded">
-        ${navItems.map(([id, label, iconName, count]) => `
-          <button class="rail-nav-btn ${state.activeWorkspace === id ? 'active' : ''}" data-workspace="${id}" type="button" title="${label}">
-            <span class="icon-wrap">${icon(iconName)}</span>
-            <span class="rail-label">${label}</span>
-            ${count ? `<span class="rail-count">${count}</span>` : ''}
-          </button>
-        `).join('')}
+      <section class="rail-wrapper">
+        <div class="rail-top">
+          <div class="rail-nav rail-nav-expanded">
+          ${navItems.map(([id, label, iconName, count]) => `
+            <button class="rail-nav-btn ${state.activeWorkspace === id ? 'active' : ''}" data-workspace="${id}" type="button" title="${label}">
+              <span class="icon-wrap">${icon(iconName)}</span>
+              <span class="rail-label">${label}</span>
+              ${count ? `<span class="rail-count">${count}</span>` : ''}
+            </button>
+          `).join('')}
+        </div>
       </div>
-    </div>
-    <div class="rail-bottom">
-      ${'' /* Master folder shortcut is disabled while accepted shares use a user-picked save path. */}
-      <button class="rail-profile-row ${state.activeWorkspace === 'settings' ? 'active' : ''}" data-workspace="settings" type="button" title="Open settings">
-        <span class="profile-avatar">${getAvatarUrl() ? `<img src="${escapeHtml(getAvatarUrl())}" alt="${escapeHtml(state.currentUser?.name || 'Avatar')}" />` : initials(state.currentUser?.name)}</span>
-        <span class="rail-profile-copy">
-          <strong>${escapeHtml(state.currentUser?.name || 'Unknown')}</strong>
-          <small>Profile and settings</small>
-        </span>
-      </button>
-    </div>
+      <div class="rail-bottom">
+        ${'' /* Master folder shortcut is disabled while accepted shares use a user-picked save path. */}
+        <button class="rail-profile-row ${state.activeWorkspace === 'settings' ? 'active' : ''}" data-workspace="settings" type="button" title="Open settings">
+          <span class="profile-avatar">${getAvatarUrl() ? `<img src="${escapeHtml(getAvatarUrl())}" alt="${escapeHtml(state.currentUser?.name || 'Avatar')}" />` : initials(state.currentUser?.name)}</span>
+          <span class="rail-profile-copy">
+            <strong>${escapeHtml(state.currentUser?.name || 'Unknown')}</strong>
+            <small>Profile and settings</small>
+          </span>
+        </button>
+      </div>
+    </section>
   `;
 }
 
@@ -451,48 +468,52 @@ function renderThreadRail() {
   if (state.activeWorkspace === 'home') {
     const recentConversations = conversations.slice(0, 8);
     threadRail.innerHTML = `
-      <div class="thread-header compact">
-        <strong>Recent chats</strong>
-      </div>
-      <div class="thread-list">
-        ${recentConversations.length ? recentConversations.map((conversation) => `
-          <button class="thread-card" data-open-chat="${conversation.id}" type="button">
-            <div class="thread-card-avatar">${initials(conversation.peerName)}</div>
-            <div class="thread-card-copy">
-              <div class="thread-card-top">
-                <strong>${escapeHtml(conversation.peerName)}</strong>
-                <span class="presence-dot ${onlinePeerIds.has(conversation.peerId) ? 'online' : ''}"></span>
+      <section class="thread-rail-content">
+        <div class="thread-header compact">
+          <strong>Recent chats</strong>
+        </div>
+        <div class="thread-list">
+          ${recentConversations.length ? recentConversations.map((conversation) => `
+            <button class="thread-card" data-open-chat="${conversation.id}" type="button">
+              <div class="thread-card-avatar">${conversation.peerAvatar ? `<img src="${escapeHtml(conversation.peerAvatar)}" />` : initials(conversation.peerName)}</div>
+              <div class="thread-card-copy">
+                <div class="thread-card-top">
+                  <strong>${escapeHtml(conversation.peerName)}</strong>
+                  <span class="presence-dot ${onlinePeerIds.has(conversation.peerId) ? 'online' : ''}"></span>
+                </div>
+                <p>${escapeHtml(conversation.lastMessagePreview || (onlinePeerIds.has(conversation.peerId) ? conversation.peerIp : 'Offline'))}</p>
               </div>
-              <p>${escapeHtml(conversation.lastMessagePreview || (onlinePeerIds.has(conversation.peerId) ? conversation.peerIp : 'Offline'))}</p>
-            </div>
-            ${conversation.unreadCount ? `<span class="thread-unread">${conversation.unreadCount}</span>` : ''}
-          </button>
-        `).join('') : `<div class="thread-empty compact-empty"><p>No recent chats</p></div>`}
-      </div>
+              ${conversation.unreadCount ? `<span class="thread-unread">${conversation.unreadCount}</span>` : ''}
+            </button>
+          `).join('') : `<div class="thread-empty compact-empty"><p>No recent chats</p></div>`}
+        </div>
+      </section>
     `;
     return;
   }
 
   if (state.activeWorkspace === 'chats') {
     threadRail.innerHTML = `
-      <div class="thread-header compact">
-        <strong>Direct Messages</strong>
-      </div>
-      <div class="thread-list">
-        ${conversations.length ? conversations.map((conversation) => `
-          <button class="thread-card ${state.activeConversationId === conversation.id ? 'active' : ''}" data-conversation="${conversation.id}" type="button">
-            <div class="thread-card-avatar">${initials(conversation.peerName)}</div>
-            <div class="thread-card-copy">
-              <div class="thread-card-top">
-                <strong>${escapeHtml(conversation.peerName)}</strong>
-                <span class="presence-dot ${onlinePeerIds.has(conversation.peerId) ? 'online' : ''}"></span>
+      <section class="thread-rail-content">
+        <div class="thread-header compact">
+          <strong>Direct Messages</strong>
+        </div>
+        <div class="thread-list">
+          ${conversations.length ? conversations.map((conversation) => `
+            <button class="thread-card ${state.activeConversationId === conversation.id ? 'active' : ''}" data-conversation="${conversation.id}" type="button">
+              <div class="thread-card-avatar">${conversation.peerAvatar ? `<img src="${escapeHtml(conversation.peerAvatar)}" />` : initials(conversation.peerName)}</div>
+              <div class="thread-card-copy">
+                <div class="thread-card-top">
+                  <strong>${escapeHtml(conversation.peerName)}</strong>
+                  <span class="presence-dot ${onlinePeerIds.has(conversation.peerId) ? 'online' : ''}"></span>
+                </div>
+                <p>${escapeHtml(conversation.lastMessagePreview || (onlinePeerIds.has(conversation.peerId) ? conversation.peerIp || 'Online' : 'Offline'))}</p>
               </div>
-              <p>${escapeHtml(conversation.lastMessagePreview || (onlinePeerIds.has(conversation.peerId) ? conversation.peerIp || 'Online' : 'Offline'))}</p>
-            </div>
-            ${conversation.unreadCount ? `<span class="thread-unread">${conversation.unreadCount}</span>` : ''}
-          </button>
-        `).join('') : `<div class="thread-empty compact-empty"><p>No conversations</p></div>`}
-      </div>
+              ${conversation.unreadCount ? `<span class="thread-unread">${conversation.unreadCount}</span>` : ''}
+            </button>
+          `).join('') : `<div class="thread-empty compact-empty"><p>No conversations</p></div>`}
+        </div>
+      </section>
     `;
     return;
   }
@@ -561,12 +582,11 @@ function renderSystemMessageCard(message) {
     return `
       <div class="message-card request-card">
         <div class="message-card-copy">
-          <strong>Share request</strong>
+          <strong>Incoming share</strong>
           <small>${escapeHtml(folderName)}</small>
         </div>
         <div class="message-card-actions">
-          ${pending ? `<button class="inline-action success" data-accept-request="${pending.id}" type="button" title="Accept">${icon('accept')}</button>
-          <button class="inline-action" data-reject-request="${pending.id}" type="button" title="Deny">${icon('close')}</button>` : '<span class="message-status-chip">Handled</span>'}
+          ${pending ? `<button class="inline-action success" data-accept-request="${pending.id}" type="button" title="Download">${icon('download')}</button>` : '<span class="message-status-chip">Downloaded</span>'}
         </div>
       </div>
     `;
@@ -600,32 +620,87 @@ function renderDeliveryTicks(message) {
 }
 
 function renderMessageRow(message, conversation) {
-  const sender = message.direction === 'outgoing' ? 'You' : message.direction === 'incoming' ? conversation.peerName : 'System';
+  const isOutgoing = message.direction === 'outgoing';
+  const sender = isOutgoing ? '' : message.direction === 'incoming' ? conversation.peerName : 'System';
   const systemCard = message.direction === 'system' ? renderSystemMessageCard(message) : '';
   const skipTextForCard = systemCard && ['access-request', 'access-response'].includes(message?.meta?.kind || '');
+  
+  const attachments = message.attachments || [];
+  const imageAttachments = attachments.filter(a => isImageFile(a.name));
+  const otherAttachments = attachments.filter(a => !isImageFile(a.name));
+
+  const myAvatar = getAvatarUrl();
+  const peerAvatar = conversation.peerAvatar;
+
   return `
     <article class="message-row ${message.direction === 'outgoing' ? 'outgoing' : message.direction === 'incoming' ? 'incoming' : 'system'}">
-      <div class="message-bubble">
-        <div class="message-meta">
-          <strong>${escapeHtml(sender)}</strong>
-          <span>${formatTime(message.createdAt, true)}</span>
+      ${message.direction !== 'system' ? `
+        <div class="message-row-avatar">
+          ${message.direction === 'outgoing' 
+            ? (myAvatar ? `<img src="${escapeHtml(myAvatar)}" />` : initials(state.currentUser?.name))
+            : (peerAvatar ? `<img src="${escapeHtml(peerAvatar)}" />` : initials(conversation.peerName))
+          }
         </div>
-        ${systemCard}
-        ${message.text && !skipTextForCard ? `<div class="markdown-body">${renderMessageMarkdown(message.text)}</div>` : ''}
-        ${(message.attachments || []).length ? `
-          <div class="attachment-list">
-            ${message.attachments.map((attachment) => `
-              <div class="attachment-pill">
-                <span class="attachment-icon">${icon(attachment.resourceType === 'folder' ? 'folder' : 'file')}</span>
-                <strong>${escapeHtml(attachment.name)}</strong>
-              </div>
-            `).join('')}
-          </div>
-        ` : ''}
-        ${renderDeliveryTicks(message)}
+      ` : ''}
+      <div class="message-bubble">
+        ${sender ? `<div class="message-sender"><strong>${escapeHtml(sender)}</strong></div>` : ''}
+        
+        <div class="message-content">
+          ${systemCard}
+          ${message.text && !skipTextForCard ? `<div class="markdown-body">${renderMessageMarkdown(message.text)}</div>` : ''}
+          
+          ${imageAttachments.length ? `
+            <div class="message-previews">
+              ${imageAttachments.map(img => `
+                <div class="message-preview">
+                  <img src="${img.path ? `file:///${img.path.replace(/\\/g, '/')}` : ''}" alt="Preview" onerror="this.parentElement.style.display='none'" />
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+
+          ${otherAttachments.length ? `
+            <div class="attachment-list">
+              ${otherAttachments.map((attachment) => `
+                <div class="attachment-pill" title="${escapeHtml(attachment.name)}">
+                  <span class="attachment-icon">${icon(attachment.resourceType === 'folder' ? 'folder' : 'file')}</span>
+                  <strong class="attachment-name">${escapeHtml(attachment.name)}</strong>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>
+
+        <div class="message-footer">
+          <span class="message-time">${formatTime(message.createdAt)}</span>
+          ${renderDeliveryTicks(message)}
+        </div>
       </div>
     </article>
   `;
+}
+
+function renderMessageList(messages, conversation) {
+  if (!messages.length) {
+    return `<div class="thread-empty compact-empty"><p>No messages yet</p></div>`;
+  }
+
+  const html = [];
+  let lastDate = null;
+
+  for (const message of messages) {
+    if (!lastDate || !isSameDay(lastDate, message.createdAt)) {
+      html.push(`
+        <div class="date-divider">
+          <span>${formatTime(message.createdAt, 'day')}</span>
+        </div>
+      `);
+      lastDate = message.createdAt;
+    }
+    html.push(renderMessageRow(message, conversation));
+  }
+
+  return html.join('');
 }
 
 function renderHomeWorkspace() {
@@ -651,7 +726,7 @@ function renderHomeWorkspace() {
           <div class="surface-list">
             ${recentConversations.length ? recentConversations.map((conversation) => `
               <button class="surface-row" type="button" data-open-chat="${conversation.id}">
-                <span class="surface-avatar">${initials(conversation.peerName)}</span>
+                <span class="surface-avatar">${conversation.peerAvatar ? `<img src="${escapeHtml(conversation.peerAvatar)}" />` : initials(conversation.peerName)}</span>
                 <span class="surface-copy">
                   <strong>${escapeHtml(conversation.peerName)}</strong>
                   <small>${escapeHtml(conversation.lastMessagePreview || 'No messages yet')}</small>
@@ -671,11 +746,10 @@ function renderHomeWorkspace() {
                 <span class="surface-avatar icon-avatar">${icon('inbox')}</span>
                 <span class="surface-copy">
                   <strong>${escapeHtml(item.folderName)}</strong>
-                  <small>${escapeHtml(item.peerName || 'Incoming request')}</small>
+                  <small>${escapeHtml(item.peerName || 'Incoming share')}</small>
                 </span>
                 <span class="surface-actions">
-                  <button class="inline-action success" data-accept-request="${item.id}" type="button" title="Accept">${icon('accept')}</button>
-                  <button class="inline-action" data-reject-request="${item.id}" type="button" title="Reject">${icon('close')}</button>
+                  <button class="inline-action success" data-accept-request="${item.id}" type="button" title="Download">${icon('download')}</button>
                 </span>
               </div>
             `).join('') : `<div class="empty-line">No pending requests</div>`}
@@ -710,10 +784,10 @@ function renderChatWorkspace() {
     <section class="workspace-shell chat-shell ${state.chatDropActive ? 'drop-active' : ''}">
       <header class="workspace-header">
         <div class="workspace-title">
-          <div class="presence-avatar">${initials(conversation.peerName)}</div>
+          <div class="presence-avatar">${conversation.peerAvatar ? `<img src="${escapeHtml(conversation.peerAvatar)}" />` : initials(conversation.peerName)}</div>
           <div>
             <strong>${escapeHtml(conversation.peerName)}</strong>
-            <span>${online ? 'Online' : 'Offline'}${conversation.peerIp ? ` - ${escapeHtml(conversation.peerIp)}` : ''}</span>
+            <span>${online ? 'Online' : 'Offline'}</span>
           </div>
         </div>
         <div class="workspace-header-actions">
@@ -723,11 +797,15 @@ function renderChatWorkspace() {
       </header>
       <div class="chat-layout single-column" data-chat-drop-zone="true">
         <section class="chat-column">
-          <div class="message-list">
-            ${state.messages.length ? state.messages.map((message) => renderMessageRow(message, conversation)).join('') : `
-              <div class="thread-empty compact-empty"><p>No messages yet</p></div>
-            `}
+          <div class="message-list" id="message-list">
+            ${renderMessageList(state.messages, conversation)}
           </div>
+          ${state.unreadCount > 0 ? `
+            <div class="new-messages-indicator" data-action="scroll-to-bottom">
+              ${icon('chevron-down')}
+              <span>${state.unreadCount} new message${state.unreadCount === 1 ? '' : 's'}</span>
+            </div>
+          ` : ''}
           ${state.chatDropActive ? `<div class="chat-drop-indicator">Drop files or folders to queue</div>` : ''}
           ${state.queuedAttachments.length ? `
             <div class="queued-strip">
@@ -873,17 +951,22 @@ function renderStage() {
     return;
   }
 
+  const messageList = document.getElementById('message-list');
+  const scrollPos = messageList ? messageList.scrollTop : null;
+
   if (state.activeWorkspace === 'home') {
     stage.innerHTML = renderHomeWorkspace();
-    return;
-  }
-  if (state.activeWorkspace === 'chats') {
+  } else if (state.activeWorkspace === 'chats') {
     stage.innerHTML = renderChatWorkspace();
     bindComposerHandlers();
-    scrollMessagesToBottom();
-    return;
+  } else {
+    stage.innerHTML = renderSettingsWorkspace();
   }
-  stage.innerHTML = renderSettingsWorkspace();
+
+  if (scrollPos !== null) {
+    const restoredList = document.getElementById('message-list');
+    if (restoredList) restoredList.scrollTop = scrollPos;
+  }
 }
 
 function renderAll() {
@@ -917,10 +1000,13 @@ function renderConversationShell() {
 
 function renderWithComposerPreserved(renderFn) {
   const input = document.getElementById('message-input');
+  const messageList = document.getElementById('message-list');
   const conversation = getActiveConversation();
   const hadFocus = !!input && document.activeElement === input;
   const selectionStart = input && typeof input.selectionStart === 'number' ? input.selectionStart : null;
   const selectionEnd = input && typeof input.selectionEnd === 'number' ? input.selectionEnd : null;
+  const scrollPos = messageList ? messageList.scrollTop : null;
+
   if (input && conversation) {
     state.messageDrafts[conversation.id] = input.value;
   }
@@ -928,6 +1014,12 @@ function renderWithComposerPreserved(renderFn) {
   renderFn();
 
   const restored = document.getElementById('message-input');
+  const restoredList = document.getElementById('message-list');
+
+  if (restoredList && scrollPos !== null) {
+    restoredList.scrollTop = scrollPos;
+  }
+
   if (restored && hadFocus) {
     restored.focus();
     if (selectionStart !== null && selectionEnd !== null) {
@@ -1170,6 +1262,13 @@ document.body.addEventListener('click', async (event) => {
     return;
   }
 
+  if (event.target.closest('[data-action="scroll-to-bottom"]')) {
+    scrollToBottom();
+    state.unreadCount = 0;
+    renderStage();
+    return;
+  }
+
   const stopButton = event.target.closest('[data-stop-share]');
   if (stopButton) {
     await api.stopSharing(stopButton.dataset.stopShare);
@@ -1281,15 +1380,45 @@ api.on('conversation-updated', async (conversations) => {
   renderWithComposerPreserved(() => renderConversationShell());
 });
 
-api.on('message-received', async () => {
+api.on('message-received', async (receivedMessage) => {
   state.conversations = await api.getConversations();
   if (!state.activeConversationId) {
     const first = getPeerConversationEntries()[0];
     state.activeConversationId = first?.id || null;
   }
+  
+  const wasAtBottom = isChatAtBottom();
   await loadConversationMessages();
-  renderWithComposerPreserved(() => renderConversationShell());
+  
+  if (state.activeWorkspace === 'chats' && state.activeConversationId) {
+    if (wasAtBottom) {
+      renderWithComposerPreserved(() => renderConversationShell());
+      scrollToBottom();
+      state.unreadCount = 0;
+    } else {
+      // User is scrolled up, just update the unread count and show indicator
+      state.unreadCount++;
+      renderWithComposerPreserved(() => renderConversationShell());
+    }
+  } else {
+    renderRailAndNotifications();
+  }
 });
+
+function isChatAtBottom() {
+  const list = document.getElementById('message-list');
+  if (!list) return false;
+  const threshold = 100; // pixels from bottom
+  return (list.scrollHeight - list.scrollTop - list.clientHeight) < threshold;
+}
+
+function scrollToBottom() {
+  const list = document.getElementById('message-list');
+  if (list) {
+    list.scrollTop = list.scrollHeight;
+    state.unreadCount = 0;
+  }
+}
 
 api.on('inbox-updated', async (inbox) => {
   state.inbox = inbox;
@@ -1341,10 +1470,26 @@ api.on('update-status', (updateStatus) => {
   }
 });
 
-hydrate().catch((error) => {
+hydrate().then(() => {
+  if (state.activeWorkspace === 'chats' && state.activeConversationId) {
+    setTimeout(scrollToBottom, 100);
+  }
+}).catch((error) => {
   console.error('Failed to hydrate Socket renderer:', error);
   state.bootstrapError = error.message || String(error);
   renderAll();
 });
+
+document.addEventListener('scroll', (event) => {
+  if (event.target.id === 'message-list') {
+    if (isChatAtBottom()) {
+      if (state.unreadCount > 0) {
+        state.unreadCount = 0;
+        const indicator = document.querySelector('.new-messages-indicator');
+        if (indicator) indicator.remove();
+      }
+    }
+  }
+}, true);
 
 

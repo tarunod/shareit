@@ -1,0 +1,233 @@
+
+.date-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 20px 0;
+  width: 100%;
+  clear: both;
+}
+
+.date-divider span {
+  background: var(--panel-2);
+  color: var(--muted);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.1);
+}
+
+.message-bubble {
+  position: relative;
+  padding: 6px 9px 14px !important; /* Bottom padding for absolute footer */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 8px !important;
+  box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.1);
+  min-width: 75px;
+}
+
+.message-row.outgoing .message-bubble {
+  background: var(--panel-3) !important;
+  border: 1px solid var(--line-2) !important;
+  color: var(--text) !important;
+}
+
+.message-row.incoming .message-bubble {
+  background: var(--panel-2) !important;
+  border: 1px solid var(--line) !important;
+  color: var(--text) !important;
+}
+
+.message-sender {
+  display: none;
+}
+
+.message-footer {
+  position: absolute;
+  bottom: 4px;
+  right: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.message-time {
+  font-size: 9px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.message-footer .delivery-ticks {
+  margin-top: 0 !important;
+  display: inline-flex;
+}
+
+.message-footer .delivery-ticks span {
+  width: 5px;
+  height: 9px;
+  border-right-width: 1.5px;
+  border-bottom-width: 1.5px;
+  border-color: var(--muted);
+}
+
+.message-previews {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.message-preview {
+  border-radius: 6px;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.message-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 420px;
+  object-fit: contain;
+}
+
+.message-bubble .attachment-list {
+  margin-top: 4px;
+  gap: 4px;
+}
+
+.message-bubble .attachment-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  border: 1px solid var(--line);
+}
+
+.message-bubble .attachment-name {
+  display: block;
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 500;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-bubble .attachment-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* System messages specifically */
+.message-row.system {
+  justify-content: center !important;
+  margin: 12px 0;
+}
+
+.message-row.system .message-bubble {
+  background: var(--panel) !important;
+  color: var(--muted) !important;
+  max-width: 85%;
+  text-align: center;
+  font-size: 12.5px;
+  padding: 5px 12px !important;
+  border-radius: 7.5px !important;
+  border: 1px solid var(--line) !important;
+}
+
+.message-row.system .message-footer,
+.message-row.system .message-sender {
+  display: none;
+}
+
+.chat-column {
+  position: relative; /* For floating indicator */
+}
+
+.new-messages-indicator {
+  position: absolute;
+  bottom: 120px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: #000; /* Dark text on accent */
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  z-index: 10;
+  animation: slideInUp 200ms ease-out;
+}
+
+.new-messages-indicator:hover {
+  background: var(--accent-2);
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 20px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+/* Global Avatar Image Styles */
+.thread-card-avatar img,
+.surface-avatar img,
+.presence-avatar img,
+.profile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
+}
+
+.thread-card-avatar,
+.surface-avatar,
+.presence-avatar,
+.profile-avatar {
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.message-row {
+  display: flex;
+  margin-bottom: 8px;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 90%;
+}
+
+.message-row.outgoing {
+  margin-left: auto;
+  flex-direction: row-reverse; /* Avatar on the right */
+}
+
+.message-row.incoming {
+  margin-right: auto;
+  flex-direction: row; /* Avatar on the left */
+}
+
+.message-row-avatar {
+  display: none;
+}
