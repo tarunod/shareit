@@ -1,5 +1,5 @@
 /**
- * server.js - Local Express + Socket.IO server for peer messaging and transfer coordination.
+ * server.js - Local Express + Socket.IO server for peer messaging and file sharing coordination.
  */
 const express = require('express');
 const http = require('http');
@@ -9,7 +9,7 @@ const { Server } = require('socket.io');
 const { store } = require('./store');
 const logger = require('./logger');
 
-const SYNC_PORT_START = 34567;
+const SERVER_PORT_START = 34567;
 
 function emitConversationState(mainWindow) {
   mainWindow.webContents.send('conversation-updated', store.getConversations());
@@ -19,11 +19,7 @@ function emitInboxState(mainWindow) {
   mainWindow.webContents.send('inbox-updated', store.getInboxItems());
 }
 
-function emitTransferState(mainWindow) {
-  mainWindow.webContents.send('transfer-updated', store.getTransfers());
-}
-
-function createServer(mainWindow, notifyApp) {
+function createServer(mainWindow, notifyApp, onAccessRequest) {
   return new Promise((resolve, reject) => {
     const app = express();
     app.use(express.json());
@@ -123,53 +119,41 @@ function createServer(mainWindow, notifyApp) {
         let ip = socket.handshake.address || '';
         if (ip.includes('::ffff:')) ip = ip.replace('::ffff:', '');
 
+        const requestWithHost = { ...request, ownerHost: ip };
         const peer = { ...(request.ownerInfo || {}), ip };
-        store.syncPeerConversation(peer);
+        store.upsertPeerConversation(peer);
         store.addInboxItem({
-          id: request.requestId,
+          id: requestWithHost.requestId,
           type: 'access-request',
-          peerId: request.ownerInfo?.id,
-          peerName: request.ownerInfo?.name,
-          folderId: request.folderId,
-          folderName: request.folderName,
-          resourceType: request.type,
-          request,
-        });
-        store.upsertTransfer({
-          id: request.folderId,
-          kind: 'incoming-share',
-          folderId: request.folderId,
-          folderName: request.folderName,
-          peerId: request.ownerInfo?.id,
-          peerName: request.ownerInfo?.name,
-          status: 'pending-request',
-          percent: 0,
-          resourceType: request.type || 'folder',
-          requestId: request.requestId,
-          direction: 'incoming',
+          peerId: requestWithHost.ownerInfo?.id,
+          peerName: requestWithHost.ownerInfo?.name,
+          folderId: requestWithHost.folderId,
+          folderName: requestWithHost.folderName,
+          resourceType: requestWithHost.type,
+          request: requestWithHost,
         });
         store.addSystemMessage({
           peer,
-          text: `${request.ownerInfo?.name || 'A peer'} wants to share ${request.folderName} with you.`,
+          text: `${requestWithHost.ownerInfo?.name || 'A peer'} wants to share ${requestWithHost.folderName} with you.`,
           meta: {
             kind: 'access-request',
-            requestId: request.requestId,
-            folderId: request.folderId,
-            request,
+            requestId: requestWithHost.requestId,
+            folderId: requestWithHost.folderId,
+            request: requestWithHost,
           },
           unread: true,
-          timestamp: request.requestedAt,
+          timestamp: requestWithHost.requestedAt,
         });
         emitInboxState(mainWindow);
         emitConversationState(mainWindow);
-        emitTransferState(mainWindow);
+        if (onAccessRequest) onAccessRequest(requestWithHost);
         if (notifyApp) {
           notifyApp({
             type: 'request',
             title: 'New access request',
-            message: `${request.ownerInfo?.name || 'A peer'} wants to share ${request.folderName}.`,
+            message: `${requestWithHost.ownerInfo?.name || 'A peer'} wants to share ${requestWithHost.folderName}.`,
             level: 'info',
-            dedupeKey: `request:${request.requestId}`,
+            dedupeKey: `request:${requestWithHost.requestId}`,
             dedupeMs: 600000,
           });
         }
@@ -177,18 +161,6 @@ function createServer(mainWindow, notifyApp) {
 
       socket.on('access-response', (response) => {
         const peer = response.ownerInfo || { id: 'unknown', name: 'Unknown peer' };
-        store.upsertTransfer({
-          id: response.folderId,
-          kind: 'share',
-          folderId: response.folderId,
-          folderName: response.folderName,
-          peerId: peer.id,
-          peerName: peer.name,
-          status: response.accepted ? 'accepted' : 'rejected',
-          percent: response.accepted ? 100 : 0,
-          direction: 'outgoing',
-          requestId: response.requestId,
-        });
         store.addSystemMessage({
           peer,
           text: response.accepted
@@ -204,7 +176,6 @@ function createServer(mainWindow, notifyApp) {
           unread: true,
         });
         emitConversationState(mainWindow);
-        emitTransferState(mainWindow);
         if (notifyApp) {
           notifyApp({
             type: 'request',
@@ -224,21 +195,9 @@ function createServer(mainWindow, notifyApp) {
         }
       });
 
-      socket.on('sync-notify', (payload) => {
-        store.upsertTransfer({
-          id: `sync:${payload.folderId}`,
-          kind: 'sync',
-          folderId: payload.folderId,
-          folderName: payload.folderName,
-          status: payload.event || 'updated',
-          file: payload.file,
-          peerName: socket.peerInfo?.name || 'Unknown peer',
-        });
-        emitTransferState(mainWindow);
-      });
     });
 
-    tryListen(SYNC_PORT_START);
+    tryListen(SERVER_PORT_START);
   });
 }
 

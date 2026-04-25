@@ -687,7 +687,8 @@ svg {
 }
 
 .workspace-shell {
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -695,6 +696,8 @@ svg {
 
 .chat-shell {
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .chat-shell.drop-active .chat-column {
@@ -704,6 +707,7 @@ svg {
 }
 
 .workspace-header {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -732,29 +736,6 @@ svg {
 .workspace-header-actions {
   display: flex;
   gap: 8px;
-}
-
-.transfer-header {
-  align-items: center;
-}
-
-.section-switch {
-  display: inline-flex;
-  gap: 6px;
-}
-
-.section-tab {
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--panel-3);
-  color: var(--muted);
-  padding: 7px 12px;
-}
-
-.section-tab.active {
-  border-color: rgba(230, 160, 95, 0.5);
-  background: rgba(230, 160, 95, 0.12);
-  color: var(--accent-2);
 }
 
 .header-action-btn,
@@ -849,6 +830,8 @@ svg {
 
 .chat-layout.single-column {
   grid-template-columns: 1fr;
+  flex: 1;
+  min-height: 0;
 }
 
 .chat-column {
@@ -994,6 +977,34 @@ svg {
   border-color: rgba(255, 127, 115, 0.34);
 }
 
+.delivery-ticks {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0;
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.delivery-ticks span {
+  width: 7px;
+  height: 12px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(42deg);
+}
+
+.delivery-ticks span + span {
+  margin-left: -2px;
+}
+
+.delivery-ticks.delivered {
+  color: rgba(231, 238, 247, 0.7);
+}
+
+.delivery-ticks.viewed {
+  color: var(--accent-2);
+}
+
 .attachment-list,
 .settings-meta {
   display: flex;
@@ -1111,23 +1122,6 @@ svg {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-}
-
-.progress-shell {
-  height: 8px;
-  margin-top: 10px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
-}
-
-.progress-fill.incoming-fill {
-  background: linear-gradient(90deg, #63cf9f, #8fe2ba);
 }
 
 .settings-card {

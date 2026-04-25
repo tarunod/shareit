@@ -17,11 +17,9 @@ function getInitialData() {
   return {
     userInfo: null,
     settings: {
-      masterFolder: 'C:\\Socket',
       avatarStyle: 'adventurer',
       avatarSeed: null,
       notificationSoundEnabled: true,
-      autoAcceptTransfers: false,
       autoCheckUpdates: true,
       autoDownloadUpdates: true,
       ignoredUpdateVersion: null,
@@ -32,7 +30,7 @@ function getInitialData() {
     conversations: {},
     messages: {},
     inbox: [],
-    transfers: [],
+    outbox: [],
   };
 }
 
@@ -70,7 +68,7 @@ function getDefaultAvatarSeed() {
   return String(fallbackName).trim() || 'socket-user';
 }
 
-function syncUserAvatarFromSettings() {
+function updateUserAvatarFromSettings() {
   if (!data.userInfo) return;
   const settings = data.settings || {};
   const style = settings.avatarStyle || 'adventurer';
@@ -118,7 +116,7 @@ function getMessagePreview(message) {
   if (message.type === 'attachment') {
     return message.attachments?.length ? `Sent ${message.attachments.length} attachment${message.attachments.length > 1 ? 's' : ''}` : 'Sent an attachment';
   }
-  if (message.type === 'system' || message.type === 'transfer') {
+  if (message.type === 'system') {
     return message.text || 'System update';
   }
   return message.text || 'New message';
@@ -150,27 +148,6 @@ function addMessageInternal({ peer, direction, type, text, attachments, meta, ti
   return message;
 }
 
-function upsertTransfer(transfer) {
-  const existingIndex = data.transfers.findIndex((item) => item.id === transfer.id);
-  const payload = {
-    createdAt: now(),
-    updatedAt: now(),
-    ...transfer,
-  };
-
-  if (existingIndex === -1) {
-    data.transfers.unshift(payload);
-  } else {
-    data.transfers[existingIndex] = {
-      ...data.transfers[existingIndex],
-      ...payload,
-      updatedAt: now(),
-    };
-  }
-  save();
-  return data.transfers.find((item) => item.id === transfer.id);
-}
-
 const store = {
   getUserInfo() {
     let changed = false;
@@ -184,7 +161,7 @@ const store = {
       changed = true;
     }
     const beforeAvatar = data.userInfo.avatar;
-    syncUserAvatarFromSettings();
+    updateUserAvatarFromSettings();
     if (beforeAvatar !== data.userInfo.avatar) changed = true;
     if (changed) save();
     return data.userInfo;
@@ -192,7 +169,7 @@ const store = {
 
   setUserInfo(info) {
     data.userInfo = { ...data.userInfo, ...info };
-    syncUserAvatarFromSettings();
+    updateUserAvatarFromSettings();
     save();
   },
 
@@ -200,11 +177,9 @@ const store = {
     let changed = false;
     if (!data.settings) {
       data.settings = {
-        masterFolder: 'C:\\Socket',
         avatarStyle: 'adventurer',
         avatarSeed: null,
         notificationSoundEnabled: true,
-        autoAcceptTransfers: false,
         autoCheckUpdates: true,
         autoDownloadUpdates: true,
         ignoredUpdateVersion: null,
@@ -213,23 +188,21 @@ const store = {
       changed = true;
     }
     const merged = {
-      masterFolder: 'C:\\Socket',
       avatarStyle: 'adventurer',
       avatarSeed: null,
       notificationSoundEnabled: true,
-      autoAcceptTransfers: false,
       autoCheckUpdates: true,
       autoDownloadUpdates: true,
       ignoredUpdateVersion: null,
       lastUpdateCheckAt: null,
       ...data.settings,
     };
+    delete merged.masterFolder;
+    delete merged.autoAcceptTransfers;
     if (
-      merged.masterFolder !== data.settings.masterFolder ||
       merged.avatarStyle !== data.settings.avatarStyle ||
       merged.avatarSeed !== data.settings.avatarSeed ||
       merged.notificationSoundEnabled !== data.settings.notificationSoundEnabled ||
-      merged.autoAcceptTransfers !== data.settings.autoAcceptTransfers ||
       merged.autoCheckUpdates !== data.settings.autoCheckUpdates ||
       merged.autoDownloadUpdates !== data.settings.autoDownloadUpdates ||
       merged.ignoredUpdateVersion !== data.settings.ignoredUpdateVersion ||
@@ -239,7 +212,7 @@ const store = {
     }
     data.settings = merged;
     const beforeAvatar = data.userInfo?.avatar;
-    syncUserAvatarFromSettings();
+    updateUserAvatarFromSettings();
     if (beforeAvatar !== data.userInfo?.avatar) changed = true;
     if (changed) save();
     return data.settings;
@@ -250,19 +223,9 @@ const store = {
       ...store.getSettings(),
       ...settingsPatch,
     };
-    syncUserAvatarFromSettings();
+    updateUserAvatarFromSettings();
     save();
     return data.settings;
-  },
-
-  getMasterFolder() {
-    return store.getSettings().masterFolder || 'C:\\Socket';
-  },
-
-  setMasterFolder(masterFolder) {
-    data.settings = { ...store.getSettings(), masterFolder };
-    save();
-    return data.settings.masterFolder;
   },
 
   getSharedFolders() {
@@ -309,7 +272,7 @@ const store = {
 
   ensureConversation,
 
-  syncPeerConversation(peer) {
+  upsertPeerConversation(peer) {
     const conversation = ensureConversation(peer);
     save();
     return conversation;
@@ -329,6 +292,17 @@ const store = {
 
   getMessages(conversationId) {
     return (data.messages && data.messages[conversationId]) || [];
+  },
+
+  getPeerRecord(peerId) {
+    const conversation = data.conversations?.[getConversationId(peerId)];
+    if (!conversation) return null;
+    return {
+      id: conversation.peerId,
+      name: conversation.peerName,
+      hostname: conversation.peerHostname,
+      ip: conversation.peerIp,
+    };
   },
 
   addOutgoingMessage({ peer, type, text, attachments, meta }) {
@@ -360,7 +334,7 @@ const store = {
     return addMessageInternal({
       peer,
       direction: 'system',
-      type: meta?.transferId ? 'transfer' : 'system',
+      type: 'system',
       text,
       attachments: [],
       meta,
@@ -403,11 +377,28 @@ const store = {
     save();
   },
 
-  getTransfers() {
-    return (data.transfers || []).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  addOutboxItem(item) {
+    const payload = {
+      id: item.id || crypto.randomUUID(),
+      status: 'queued',
+      createdAt: now(),
+      updatedAt: now(),
+      ...item,
+    };
+    data.outbox = data.outbox || [];
+    data.outbox.push(payload);
+    save();
+    return payload;
   },
 
-  upsertTransfer,
+  getOutboxItems(peerId) {
+    return (data.outbox || []).filter((item) => !peerId || item.peerId === peerId);
+  },
+
+  removeOutboxItem(id) {
+    data.outbox = (data.outbox || []).filter((item) => item.id !== id);
+    save();
+  },
 };
 
 module.exports = { store, getConversationId };

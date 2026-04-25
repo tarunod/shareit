@@ -1,5 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
+const http = require('http');
+const https = require('https');
 const os = require('os');
 const path = require('path');
 const chokidar = require('chokidar');
@@ -7,19 +9,18 @@ const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage, shell, Not
 const { autoUpdater } = require('electron-updater');
 const { createServer } = require('./server');
 const { PeerDiscovery } = require('./discovery');
-const { SyncManager } = require('./sync');
 const { store, getConversationId } = require('./store');
 const logger = require('./logger');
 
 let mainWindow;
 let tray;
 let peerDiscovery;
-let syncManager;
 let server;
 let devReloader;
 let devReloadRestarting = false;
 let updateCheckTimer = null;
 let autoUpdaterConfigured = false;
+const promptedAccessRequests = new Set();
 const notificationDedup = new Map();
 const updateStatusState = {
   status: 'idle',
@@ -41,20 +42,8 @@ function getAppIcon() {
   return nativeImage.createFromPath(APP_ICON_PATH);
 }
 
-function getMasterFolder() {
-  const folder = store.getMasterFolder();
-  if (!fs.existsSync(folder)) {
-    fs.mkdirSync(folder, { recursive: true });
-  }
-  return folder;
-}
-
 function emitConversations() {
   mainWindow.webContents.send('conversation-updated', store.getConversations());
-}
-
-function emitTransfers() {
-  mainWindow.webContents.send('transfer-updated', store.getTransfers());
 }
 
 function emitInbox() {
@@ -152,18 +141,16 @@ function createWindow() {
 
 function createTray() {
   tray = new Tray(getAppIcon());
-  tray.setToolTip('Socket - Local network messaging and transfers');
+  tray.setToolTip('Socket - Local network messaging and file sharing');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open Socket', click: () => mainWindow.show() },
-    { type: 'separator' },
-    { label: 'Open Master Folder', click: () => shell.openPath(getMasterFolder()) },
     { type: 'separator' },
     { label: 'Quit', click: () => { app.exit(0); } },
   ]));
   tray.on('double-click', () => mainWindow.show());
 }
 
-function createSharedItem(folderPath, peerIds) {
+function createSharedItem(folderPath, peerIds, sendRequest = true) {
   const userInfo = store.getUserInfo();
   const stats = fs.statSync(folderPath);
   const type = stats.isDirectory() ? 'folder' : 'file';
@@ -178,14 +165,14 @@ function createSharedItem(folderPath, peerIds) {
   };
 
   store.addSharedFolder(folder);
-  if (syncManager) syncManager.watchFolder(folder);
-  if (peerDiscovery) peerDiscovery.sendAccessRequest(folder, peerIds);
+  if (sendRequest && peerDiscovery) peerDiscovery.sendAccessRequest(folder, peerIds);
   return folder;
 }
 
-function addAttachmentMessages(peer, sharedItems) {
+function addAttachmentMessages(peer, sharedItems, deliveryStatus = 'requested') {
+  const messages = [];
   for (const item of sharedItems) {
-    store.addOutgoingMessage({
+    const message = store.addOutgoingMessage({
       peer,
       type: 'attachment',
       text: '',
@@ -195,25 +182,18 @@ function addAttachmentMessages(peer, sharedItems) {
         path: item.path,
         resourceType: item.type,
       }],
-      meta: { transferId: item.id, resourceType: item.type },
+      meta: { shareId: item.id, resourceType: item.type, deliveryStatus },
     });
-    store.upsertTransfer({
-      id: item.id,
-      kind: 'share',
-      folderId: item.id,
-      folderName: item.name,
-      peerId: peer.id,
-      peerName: peer.name,
-      status: 'requested',
-      percent: 0,
-      resourceType: item.type,
-    });
+    messages.push(message);
   }
+  return messages;
 }
 
 function sendMessagePayload(payload) {
-  const peer = peerDiscovery?.getPeerById(payload.peerId);
-  if (!peer) throw new Error('Selected peer is not currently available on your network');
+  const onlinePeer = peerDiscovery?.getPeerById(payload.peerId);
+  const peer = onlinePeer || store.getPeerRecord(payload.peerId);
+  if (!peer) throw new Error('Selected peer is unknown');
+  const isOnline = !!onlinePeer;
 
   if (payload.text && payload.text.trim()) {
     const message = store.addOutgoingMessage({
@@ -221,25 +201,263 @@ function sendMessagePayload(payload) {
       type: 'text',
       text: payload.text.trim(),
       attachments: [],
+      meta: { deliveryStatus: isOnline ? 'sent' : 'queued' },
     });
-    peerDiscovery.sendDirectMessage(peer.id, {
-      id: message.id,
-      type: 'text',
-      text: message.text,
-      attachments: [],
-      createdAt: message.createdAt,
-    });
+    if (isOnline) {
+      peerDiscovery.sendDirectMessage(peer.id, {
+        id: message.id,
+        type: 'text',
+        text: message.text,
+        attachments: [],
+        createdAt: message.createdAt,
+      });
+    } else {
+      store.addOutboxItem({
+        peerId: peer.id,
+        kind: 'text',
+        messageId: message.id,
+        text: message.text,
+        createdAt: message.createdAt,
+      });
+    }
   }
 
   const attachmentPaths = payload.attachments || [];
   if (attachmentPaths.length > 0) {
-    const sharedItems = attachmentPaths.map((filePath) => createSharedItem(filePath, [peer.id]));
-    addAttachmentMessages(peer, sharedItems);
+    const sharedItems = attachmentPaths.map((filePath) => createSharedItem(filePath, [peer.id], isOnline));
+    addAttachmentMessages(peer, sharedItems, isOnline ? 'requested' : 'queued');
+    if (!isOnline) {
+      for (const item of sharedItems) {
+        store.addOutboxItem({
+          peerId: peer.id,
+          kind: 'share',
+          folderId: item.id,
+          createdAt: Date.now(),
+        });
+      }
+    }
   }
 
   emitConversations();
-  emitTransfers();
   return { conversationId: getConversationId(peer.id) };
+}
+
+function flushQueuedForPeer(peer) {
+  if (!peerDiscovery || !peer?.id) return;
+  const queuedItems = store.getOutboxItems(peer.id);
+  for (const item of queuedItems) {
+    try {
+      if (item.kind === 'text') {
+        peerDiscovery.sendDirectMessage(peer.id, {
+          id: item.messageId,
+          type: 'text',
+          text: item.text,
+          attachments: [],
+          createdAt: item.createdAt,
+          meta: { deliveredFromQueue: true },
+        });
+        store.removeOutboxItem(item.id);
+      }
+      if (item.kind === 'share') {
+        const folder = store.getSharedFolders().find((entry) => entry.id === item.folderId);
+        if (!folder) {
+          store.removeOutboxItem(item.id);
+          continue;
+        }
+        peerDiscovery.sendAccessRequest(folder, [peer.id]);
+        store.removeOutboxItem(item.id);
+      }
+    } catch (error) {
+      logger.warn('Outbox', `Failed to flush queued ${item.kind} for ${peer.name || peer.id}: ${error.message}`);
+    }
+  }
+  if (queuedItems.length) {
+    emitConversations();
+  }
+}
+
+function requestURL(url, responseHandler) {
+  return new Promise((resolve, reject) => {
+    const protocol = url.startsWith('https') ? https : http;
+    const req = protocol.get(url, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        reject(new Error(`HTTP ${response.statusCode}`));
+        return;
+      }
+      responseHandler(response, resolve, reject);
+    });
+    req.on('error', reject);
+  });
+}
+
+function fetchJSON(url) {
+  return requestURL(url, (response, resolve, reject) => {
+    let data = '';
+    response.on('data', (chunk) => { data += chunk; });
+    response.on('end', () => {
+      try {
+        resolve(JSON.parse(data));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    response.on('error', reject);
+  });
+}
+
+function downloadFile(url, targetPath) {
+  return requestURL(url, (response, resolve, reject) => {
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    const file = fs.createWriteStream(targetPath);
+    response.pipe(file);
+    file.on('finish', () => {
+      file.close(resolve);
+    });
+    file.on('error', reject);
+    response.on('error', reject);
+  });
+}
+
+function getPeerDownloadHost(request) {
+  let host = request.ownerHost;
+  if (peerDiscovery && request.ownerInfo?.id) {
+    const currentPeer = peerDiscovery.getPeers().find((peer) => peer.id === request.ownerInfo.id);
+    if (currentPeer?.ip) host = currentPeer.ip;
+  }
+  if (!host || host === 'undefined') host = '127.0.0.1';
+  if (host.includes(':') && !host.startsWith('[')) host = `[${host}]`;
+  return host;
+}
+
+async function downloadAcceptedShare(request, destinationPath) {
+  const host = getPeerDownloadHost(request);
+  const baseUrl = `http://${host}:${request.ownerPort}`;
+  logger.info('Share', `Downloading ${request.folderName} from ${baseUrl}`);
+
+  const fileList = await fetchJSON(`${baseUrl}/list/${request.folderId}`);
+  const files = fileList.files || [];
+
+  for (const file of files) {
+    const encodedPath = file.path.split('/').map(encodeURIComponent).join('/');
+    const targetPath = request.type === 'file'
+      ? destinationPath
+      : path.join(destinationPath, file.path.replace(/\//g, path.sep));
+    await downloadFile(`${baseUrl}/file/${request.folderId}/${encodedPath}`, targetPath);
+  }
+}
+
+async function chooseShareDestination(request) {
+  const downloadsDir = app.getPath('downloads');
+  const itemName = request.folderName || 'Shared item';
+  const itemType = request.type || 'folder';
+
+  if (itemType === 'file') {
+    const options = {
+      title: `Save ${itemName}`,
+      defaultPath: path.join(downloadsDir, itemName),
+      buttonLabel: 'Save',
+    };
+    const result = mainWindow && mainWindow.isVisible()
+      ? await dialog.showSaveDialog(mainWindow, options)
+      : await dialog.showSaveDialog(options);
+    return result.canceled ? null : result.filePath;
+  }
+
+  const options = {
+    properties: ['openDirectory', 'createDirectory'],
+    title: `Choose where to save ${itemName}`,
+    buttonLabel: 'Choose folder',
+    defaultPath: downloadsDir,
+  };
+  const result = mainWindow && mainWindow.isVisible()
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled || !result.filePaths?.[0]) return null;
+  return path.join(result.filePaths[0], itemName);
+}
+
+function finishAcceptedDownload(request, destinationPath) {
+  downloadAcceptedShare(request, destinationPath).then(() => {
+    store.updateReceivedFolder(request.folderId, { status: 'downloaded', downloadedAt: Date.now() });
+  }).catch((error) => {
+    logger.error('Share', `Download failed for ${request.folderName}: ${error.message}`);
+    store.updateReceivedFolder(request.folderId, { status: 'error', error: error.message });
+  });
+}
+
+async function acceptAccessRequest(request) {
+  const destinationPath = await chooseShareDestination(request);
+  if (!destinationPath) return false;
+
+  const receivedFolder = {
+    id: request.folderId,
+    name: request.folderName,
+    type: request.type || 'folder',
+    savePath: destinationPath,
+    ownerInfo: request.ownerInfo,
+    ownerHost: request.ownerHost,
+    ownerPort: request.ownerPort,
+    acceptedAt: Date.now(),
+    status: 'accepted',
+  };
+  store.addReceivedFolder(receivedFolder);
+  store.updateInboxItem(request.requestId, { status: 'accepted' });
+  store.addSystemMessage({
+    peer: request.ownerInfo,
+    text: `You accepted ${request.folderName}. Download is starting locally.`,
+    meta: {
+      kind: 'access-accepted-local',
+      folderId: request.folderId,
+      requestId: request.requestId,
+      request,
+    },
+  });
+  if (peerDiscovery) peerDiscovery.sendAccessResponse(request, true);
+  finishAcceptedDownload(request, destinationPath);
+  emitInbox();
+  emitConversations();
+  return true;
+}
+
+function rejectAccessRequest(request) {
+  store.updateInboxItem(request.requestId, { status: 'rejected' });
+  store.addSystemMessage({
+    peer: request.ownerInfo,
+    text: `You declined ${request.folderName}.`,
+    meta: {
+      kind: 'access-rejected-local',
+      folderId: request.folderId,
+      requestId: request.requestId,
+      request,
+    },
+  });
+  if (peerDiscovery) peerDiscovery.sendAccessResponse(request, false);
+  emitInbox();
+  emitConversations();
+  return true;
+}
+
+async function promptForAccessRequest(request) {
+  if (!request?.requestId || promptedAccessRequests.has(request.requestId)) return;
+  promptedAccessRequests.add(request.requestId);
+
+  const senderName = request.ownerInfo?.name || 'A peer';
+  const options = {
+    type: 'question',
+    buttons: ['Accept', 'Later', 'Reject'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Incoming file share',
+    message: `${senderName} wants to share "${request.folderName}" with you.`,
+    detail: 'Accept to choose where to save it, or handle it later from the app.',
+  };
+  const result = mainWindow && mainWindow.isVisible()
+    ? await dialog.showMessageBox(mainWindow, options)
+    : await dialog.showMessageBox(options);
+
+  if (result.response === 0) await acceptAccessRequest(request);
+  if (result.response === 2) rejectAccessRequest(request);
 }
 
 function registerHandlers() {
@@ -262,11 +480,9 @@ function registerHandlers() {
   ipcMain.handle('get-peers', () => peerDiscovery ? peerDiscovery.getPeers() : []);
   ipcMain.handle('get-shared-folders', () => store.getSharedFolders());
   ipcMain.handle('get-received-folders', () => store.getReceivedFolders());
-  ipcMain.handle('get-sync-progress', () => syncManager ? syncManager.getProgress() : {});
   ipcMain.handle('get-conversations', () => store.getConversations());
   ipcMain.handle('get-messages', (_, conversationId) => store.getMessages(conversationId));
   ipcMain.handle('get-inbox-items', () => store.getInboxItems());
-  ipcMain.handle('get-transfers', () => store.getTransfers());
   ipcMain.handle('mark-conversation-read', (_, conversationId) => store.markConversationRead(conversationId));
 
   ipcMain.handle('send-message', async (_, payload) => {
@@ -275,11 +491,6 @@ function registerHandlers() {
 
   ipcMain.handle('send-files', async (_, payload) => {
     return sendMessagePayload(payload);
-  });
-
-  ipcMain.handle('force-sync', () => {
-    if (syncManager) syncManager.syncReceivedFolders();
-    return true;
   });
 
   ipcMain.handle('pick-file', async () => {
@@ -319,14 +530,6 @@ function registerHandlers() {
       });
   });
 
-  ipcMain.handle('pick-master-folder', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory', 'createDirectory'],
-      title: 'Select master folder',
-    });
-    return result.canceled ? null : result.filePaths[0];
-  });
-
   ipcMain.handle('save-pasted-image', (_, payload) => {
     if (!payload || !Array.isArray(payload.bytes) || payload.bytes.length === 0) return null;
     const mimeType = payload.mimeType || 'image/png';
@@ -347,107 +550,25 @@ function registerHandlers() {
 
   ipcMain.handle('share-folder', async (_, { folderPath, peerIds }) => {
     const item = createSharedItem(folderPath, peerIds);
-    emitTransfers();
     return item;
   });
 
   ipcMain.handle('stop-sharing', (_, folderId) => {
     store.removeSharedFolder(folderId);
-    if (syncManager) syncManager.unwatchFolder(folderId);
-    emitTransfers();
     return true;
   });
 
-  ipcMain.handle('open-synced-folder', (_, folderId) => {
+  ipcMain.handle('open-received-folder', (_, folderId) => {
     const folder = store.getReceivedFolders().find((entry) => entry.id === folderId);
     if (!folder) return false;
-    shell.openPath(folder.syncPath);
+    shell.openPath(folder.savePath);
     return true;
   });
 
-  ipcMain.handle('accept-access', (_, request) => {
-    store.addReceivedFolder({
-      id: request.folderId,
-      name: request.folderName,
-      type: request.type || 'folder',
-      syncPath: path.join(getMasterFolder(), request.ownerInfo?.name || 'Unknown', request.folderName),
-      ownerInfo: request.ownerInfo,
-      ownerHost: request.ownerHost,
-      ownerPort: request.ownerPort,
-      acceptedAt: Date.now(),
-      status: 'pending-sync',
-    });
-    store.updateInboxItem(request.requestId, { status: 'accepted' });
-    store.addSystemMessage({
-      peer: request.ownerInfo,
-      text: `You accepted ${request.folderName}. Sync is starting locally.`,
-      meta: {
-        kind: 'access-accepted-local',
-        folderId: request.folderId,
-        requestId: request.requestId,
-        request,
-      },
-    });
-    store.upsertTransfer({
-      id: request.folderId,
-      kind: 'incoming-share',
-      folderId: request.folderId,
-      folderName: request.folderName,
-      peerId: request.ownerInfo?.id,
-      peerName: request.ownerInfo?.name,
-      status: 'pending-sync',
-      percent: 0,
-      resourceType: request.type || 'folder',
-      direction: 'incoming',
-    });
-    if (peerDiscovery) peerDiscovery.sendAccessResponse(request, true);
-    if (syncManager) syncManager.syncReceivedFolders();
-    emitInbox();
-    emitConversations();
-    emitTransfers();
-    return true;
-  });
+  ipcMain.handle('accept-access', async (_, request) => acceptAccessRequest(request));
 
-  ipcMain.handle('reject-access', (_, request) => {
-    store.updateInboxItem(request.requestId, { status: 'rejected' });
-    store.addSystemMessage({
-      peer: request.ownerInfo,
-      text: `You declined ${request.folderName}.`,
-      meta: {
-        kind: 'access-rejected-local',
-        folderId: request.folderId,
-        requestId: request.requestId,
-        request,
-      },
-    });
-    store.upsertTransfer({
-      id: request.folderId,
-      kind: 'incoming-share',
-      folderId: request.folderId,
-      folderName: request.folderName,
-      peerId: request.ownerInfo?.id,
-      peerName: request.ownerInfo?.name,
-      status: 'rejected',
-      percent: 0,
-      resourceType: request.type || 'folder',
-      direction: 'incoming',
-    });
-    if (peerDiscovery) peerDiscovery.sendAccessResponse(request, false);
-    emitInbox();
-    emitConversations();
-    emitTransfers();
-    return true;
-  });
+  ipcMain.handle('reject-access', (_, request) => rejectAccessRequest(request));
 
-  ipcMain.handle('open-master-folder', () => shell.openPath(getMasterFolder()));
-  ipcMain.handle('get-master-folder', () => getMasterFolder());
-  ipcMain.handle('set-master-folder', (_, folderPath) => {
-    if (!folderPath) return getMasterFolder();
-    fs.mkdirSync(folderPath, { recursive: true });
-    store.setMasterFolder(folderPath);
-    if (syncManager) syncManager.setMasterFolder(folderPath);
-    return folderPath;
-  });
   ipcMain.handle('get-window-state', () => ({
     isMaximized: mainWindow ? mainWindow.isMaximized() : false,
   }));
@@ -653,7 +774,6 @@ function setupDevReload() {
     path.join(__dirname, 'preload.js'),
     path.join(__dirname, 'server.js'),
     path.join(__dirname, 'discovery.js'),
-    path.join(__dirname, 'sync.js'),
     path.join(__dirname, 'store.js'),
     path.join(__dirname, 'logger.js'),
   ];
@@ -702,14 +822,11 @@ if (!gotTheLock) {
     registerHandlers();
     createWindow();
     createTray();
-    server = await createServer(mainWindow, notifyApp);
-    peerDiscovery = new PeerDiscovery(mainWindow, server.port, notifyApp);
+    server = await createServer(mainWindow, notifyApp, promptForAccessRequest);
+    peerDiscovery = new PeerDiscovery(mainWindow, server.port, notifyApp, flushQueuedForPeer);
     peerDiscovery.start();
-    syncManager = new SyncManager(mainWindow, getMasterFolder(), peerDiscovery, notifyApp);
-    syncManager.start();
     emitConversations();
     emitInbox();
-    emitTransfers();
     setupDevReload();
     setupAutoUpdater();
   });
@@ -718,6 +835,5 @@ if (!gotTheLock) {
     if (devReloader) devReloader.close();
     if (updateCheckTimer) clearInterval(updateCheckTimer);
     if (peerDiscovery) peerDiscovery.stop();
-    if (syncManager) syncManager.stop();
   });
 }

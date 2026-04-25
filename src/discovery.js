@@ -14,10 +14,11 @@ const PEER_TIMEOUT = 10000;
 const BEACON_TYPES = new Set(['socket-beacon', 'shareit-beacon']);
 
 class PeerDiscovery {
-  constructor(mainWindow, serverPort, notifyApp) {
+  constructor(mainWindow, serverPort, notifyApp, onPeerAvailable) {
     this.mainWindow = mainWindow;
     this.serverPort = serverPort;
     this.notifyApp = notifyApp;
+    this.onPeerAvailable = onPeerAvailable;
     this.peers = new Map();
     this.socket = null;
     this.broadcastTimer = null;
@@ -47,8 +48,9 @@ class PeerDiscovery {
           lastSeen: Date.now(),
         });
 
-        store.syncPeerConversation(this.peers.get(data.id));
+        store.upsertPeerConversation(this.peers.get(data.id));
         this.emitPresenceUpdate();
+        if (this.onPeerAvailable) this.onPeerAvailable(this.peers.get(data.id));
 
         if (!existing) {
           if (this.notifyApp) {
@@ -248,18 +250,6 @@ class PeerDiscovery {
     socket.on('connect_error', (err) => {
       logger.error('Discovery', `Failed to send access response to ${host}: ${err.message}`);
     });
-  }
-
-  notifySyncChange(folderId, changeInfo) {
-    const folder = store.getSharedFolders().find((entry) => entry.id === folderId);
-    if (!folder) return;
-
-    for (const peerId of folder.peers || []) {
-      const peer = this.peers.get(peerId);
-      if (!peer) continue;
-      const socket = this.getPeerSocket(peer);
-      socket.emit('sync-notify', { folderId, ...changeInfo });
-    }
   }
 
   getLocalIP() {

@@ -15,14 +15,10 @@ const state = {
   conversations: [],
   messages: [],
   inbox: [],
-  transfers: [],
   sharedFolders: [],
   receivedFolders: [],
-  syncProgress: {},
-  masterFolder: 'C:\\Socket',
   activeWorkspace: 'home',
   activeConversationId: null,
-  activeTransferSection: 'incoming',
   queuedAttachments: [],
   messageDrafts: {},
   chatDropActive: false,
@@ -52,7 +48,6 @@ const toastStack = document.getElementById('toast-stack');
 const notificationAnchor = document.getElementById('notification-anchor');
 const notificationButton = document.getElementById('btn-notifications');
 const maximizeButton = document.getElementById('btn-maximize');
-const autoAcceptInFlight = new Set();
 
 function escapeHtml(value) {
   return String(value || '')
@@ -154,14 +149,12 @@ function icon(name) {
   const icons = {
     home: '<path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/>',
     chats: '<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/>',
-    transfers: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>',
     shared: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.82 3.98"/><path d="m15.41 6.51-6.82 3.98"/>',
     inbox: '<path d="M4 5h16v10H15l-3 3-3-3H4Z"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06A2 2 0 1 1 4.5 16.9l.06-.06A1.65 1.65 0 0 0 4.9 15a1.65 1.65 0 0 0-1.51-1H3.3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.9 9a1.65 1.65 0 0 0-.33-1.82L4.5 7.1A2 2 0 1 1 7.33 4.3l.06.06A1.65 1.65 0 0 0 9.2 4a1.65 1.65 0 0 0 1-1.51V2.4a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06A2 2 0 1 1 19.9 7.1l-.06.06A1.65 1.65 0 0 0 19.5 9a1.65 1.65 0 0 0 1.51 1h.09a2 2 0 1 1 0 4H21a1.65 1.65 0 0 0-1.6 1Z"/>',
     folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
     file: '<path d="M8 3h6l4 4v14H8a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M14 3v5h5"/>',
     attach: '<path d="M16.5 6.5 9 14a3 3 0 1 0 4.24 4.24l7.07-7.07a5 5 0 0 0-7.07-7.07L5.46 11.88a7 7 0 1 0 9.9 9.9L21 16.14"/>',
-    sync: '<path d="M3 12a9 9 0 0 1 15-6"/><path d="M21 4v5h-5"/><path d="M21 12a9 9 0 0 1-15 6"/><path d="M3 20v-5h5"/>',
     send: '<path d="M3 20 21 12 3 4l2 7 10 1-10 1Z"/>',
     bell: '<path d="M15 17H5l1.4-1.4A2 2 0 0 0 7 14.2V10a5 5 0 1 1 10 0v4.2a2 2 0 0 0 .6 1.4L19 17h-4"/><path d="M9 17a3 3 0 0 0 6 0"/>',
     minimize: '<path d="M5 12h14"/>',
@@ -233,7 +226,11 @@ function getPeerConversationEntries() {
       });
     }
   }
-  return Array.from(map.values()).sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
+  return Array.from(map.values()).sort((a, b) => {
+    const messageDelta = (b.lastMessageAt || 0) - (a.lastMessageAt || 0);
+    if (messageDelta !== 0) return messageDelta;
+    return (a.peerName || '').localeCompare(b.peerName || '');
+  });
 }
 
 function getActiveConversation() {
@@ -296,19 +293,6 @@ function getRecentEvents() {
     });
   }
 
-  for (const transfer of state.transfers) {
-    events.push({
-      id: `transfer:${transfer.id}`,
-      kind: transfer.resourceType === 'folder' ? 'folder' : 'transfer',
-      title: transfer.folderName || transfer.file || 'Transfer',
-      subtitle: transfer.peerName || transfer.status || 'Transfer update',
-      at: transfer.updatedAt || transfer.createdAt,
-      status: transfer.status,
-      workspace: 'transfers',
-      transferId: transfer.id,
-    });
-  }
-
   return events.sort((a, b) => (b.at || 0) - (a.at || 0));
 }
 
@@ -326,22 +310,26 @@ async function loadConversationMessages() {
   state.conversations = await api.getConversations();
 }
 
+function scrollMessagesToBottom() {
+  requestAnimationFrame(() => {
+    const list = document.querySelector('.message-list');
+    if (list) list.scrollTop = list.scrollHeight;
+  });
+}
+
 async function hydrate() {
   if (!api) {
     throw new Error('Renderer API is unavailable. Preload did not expose the desktop bridge.');
   }
 
   state.currentUser = await api.getUserInfo();
-  const [settings, peers, conversations, inbox, transfers, sharedFolders, receivedFolders, syncProgress, masterFolder, windowState, updateStatus] = await Promise.all([
+  const [settings, peers, conversations, inbox, sharedFolders, receivedFolders, windowState, updateStatus] = await Promise.all([
     api.getSettings ? api.getSettings() : Promise.resolve({}),
     api.getPeers(),
     api.getConversations(),
     api.getInboxItems(),
-    api.getTransfers(),
     api.getSharedFolders(),
     api.getReceivedFolders(),
-    api.getSyncProgress(),
-    api.getMasterFolder(),
     api.getWindowState(),
     api.getUpdateStatus ? api.getUpdateStatus() : Promise.resolve(null),
   ]);
@@ -359,11 +347,8 @@ async function hydrate() {
   state.peers = peers;
   state.conversations = conversations;
   state.inbox = inbox;
-  state.transfers = transfers;
   state.sharedFolders = sharedFolders;
   state.receivedFolders = receivedFolders;
-  state.syncProgress = syncProgress;
-  state.masterFolder = masterFolder;
   state.windowState = windowState || { isMaximized: false };
   state.updateStatus = {
     ...state.updateStatus,
@@ -427,7 +412,6 @@ function renderLeftRail() {
     const navItems = [
       ['home', 'Home', 'home', 0],
       ['chats', 'Chats', 'chats', state.conversations.filter((item) => item.unreadCount).length],
-      ['transfers', 'Transfers', 'transfers', state.transfers.filter((item) => ['syncing', 'pending-request', 'pending-sync'].includes(item.status)).length],
     ];
 
     rail.innerHTML = `
@@ -443,17 +427,7 @@ function renderLeftRail() {
       </div>
     </div>
     <div class="rail-bottom">
-      <button class="rail-utility rail-utility-wide" data-action="manual-sync" type="button" title="Sync now">
-        <span class="icon-wrap">${icon('sync')}</span>
-        <span class="rail-label">Sync now</span>
-      </button>
-      <button class="rail-utility rail-utility-wide" data-action="open-master" type="button" title="Open master folder">
-        <span class="icon-wrap">${icon('folder')}</span>
-        <span class="rail-button-copy">
-          <strong class="rail-label">Open folder</strong>
-          <small title="${escapeHtml(state.masterFolder || '')}">${escapeHtml(state.masterFolder || '')}</small>
-        </span>
-      </button>
+      ${'' /* Master folder shortcut is disabled while accepted shares use a user-picked save path. */}
       <button class="rail-profile-row ${state.activeWorkspace === 'settings' ? 'active' : ''}" data-workspace="settings" type="button" title="Open settings">
         <span class="profile-avatar">${getAvatarUrl() ? `<img src="${escapeHtml(getAvatarUrl())}" alt="${escapeHtml(state.currentUser?.name || 'Avatar')}" />` : initials(state.currentUser?.name)}</span>
         <span class="rail-profile-copy">
@@ -489,7 +463,7 @@ function renderThreadRail() {
                 <strong>${escapeHtml(conversation.peerName)}</strong>
                 <span class="presence-dot ${onlinePeerIds.has(conversation.peerId) ? 'online' : ''}"></span>
               </div>
-              <p>${escapeHtml(conversation.lastMessagePreview || conversation.peerIp || 'No messages yet')}</p>
+              <p>${escapeHtml(conversation.lastMessagePreview || (onlinePeerIds.has(conversation.peerId) ? conversation.peerIp : 'Offline'))}</p>
             </div>
             ${conversation.unreadCount ? `<span class="thread-unread">${conversation.unreadCount}</span>` : ''}
           </button>
@@ -513,7 +487,7 @@ function renderThreadRail() {
                 <strong>${escapeHtml(conversation.peerName)}</strong>
                 <span class="presence-dot ${onlinePeerIds.has(conversation.peerId) ? 'online' : ''}"></span>
               </div>
-              <p>${escapeHtml(conversation.lastMessagePreview || conversation.peerIp || 'Start chat')}</p>
+              <p>${escapeHtml(conversation.lastMessagePreview || (onlinePeerIds.has(conversation.peerId) ? conversation.peerIp || 'Online' : 'Offline'))}</p>
             </div>
             ${conversation.unreadCount ? `<span class="thread-unread">${conversation.unreadCount}</span>` : ''}
           </button>
@@ -537,13 +511,7 @@ function renderThreadRail() {
               <p>Visible to peers on your network</p>
             </span>
           </div>
-          <div class="summary-row">
-            <span class="summary-icon">${icon('folder')}</span>
-            <span class="summary-copy">
-              <strong>Master folder</strong>
-              <p>${escapeHtml(state.masterFolder || '')}</p>
-            </span>
-          </div>
+          ${'' /* Master folder summary is disabled while accepted shares use a user-picked save path. */}
           <div class="summary-row">
             <span class="summary-icon">${icon('home')}</span>
             <span class="summary-copy">
@@ -557,11 +525,7 @@ function renderThreadRail() {
     return;
   }
 
-  const workspaceSummaries = {
-    transfers: ['Transfers', state.transfers.length || Object.keys(state.syncProgress).length, 'Recent sync and share activity'],
-  };
-
-  const [title, count, subtitle] = workspaceSummaries[state.activeWorkspace] || ['Workspace', 0, ''];
+  const [title, count, subtitle] = ['Workspace', 0, ''];
   threadRail.innerHTML = `
     <div class="thread-header compact">
       <strong>${title}</strong>
@@ -618,26 +582,27 @@ function renderSystemMessageCard(message) {
       </div>
     `;
   }
-  if (kind === 'sync-status') {
-    const status = message?.meta?.status || 'syncing';
-    const statusLabel = status === 'synced' ? 'Completed' : status === 'error' ? 'Failed' : 'In progress';
-    return `
-      <div class="message-card">
-        <div class="message-card-copy">
-          <strong>Sync update</strong>
-          <small>${escapeHtml(message.text || '')}</small>
-        </div>
-        <span class="message-status-chip ${status === 'synced' ? 'success' : status === 'error' ? 'danger' : ''}">${statusLabel}</span>
-      </div>
-    `;
-  }
   return '';
+}
+
+function renderDeliveryTicks(message) {
+  if (message.direction !== 'outgoing') return '';
+  const status = message.meta?.deliveryStatus || 'sent';
+  const viewed = status === 'viewed' || status === 'read';
+  const delivered = viewed || status === 'delivered' || status === 'sent' || status === 'requested';
+  const tickClass = viewed ? 'viewed' : delivered ? 'delivered' : 'queued';
+  return `
+    <span class="delivery-ticks ${tickClass}" title="${viewed ? 'Viewed' : delivered ? 'Delivered' : 'Queued'}">
+      <span></span>
+      ${delivered ? '<span></span>' : ''}
+    </span>
+  `;
 }
 
 function renderMessageRow(message, conversation) {
   const sender = message.direction === 'outgoing' ? 'You' : message.direction === 'incoming' ? conversation.peerName : 'System';
   const systemCard = message.direction === 'system' ? renderSystemMessageCard(message) : '';
-  const skipTextForCard = systemCard && ['access-request', 'access-response', 'sync-status'].includes(message?.meta?.kind || '');
+  const skipTextForCard = systemCard && ['access-request', 'access-response'].includes(message?.meta?.kind || '');
   return `
     <article class="message-row ${message.direction === 'outgoing' ? 'outgoing' : message.direction === 'incoming' ? 'incoming' : 'system'}">
       <div class="message-bubble">
@@ -657,6 +622,7 @@ function renderMessageRow(message, conversation) {
             `).join('')}
           </div>
         ` : ''}
+        ${renderDeliveryTicks(message)}
       </div>
     </article>
   `;
@@ -741,7 +707,7 @@ function renderChatWorkspace() {
   const online = isPeerOnline(conversation.peerId);
   const draft = state.messageDrafts[conversation.id] || '';
   return `
-    <section class="workspace-shell chat-shell ${state.chatDropActive && online ? 'drop-active' : ''}">
+    <section class="workspace-shell chat-shell ${state.chatDropActive ? 'drop-active' : ''}">
       <header class="workspace-header">
         <div class="workspace-title">
           <div class="presence-avatar">${initials(conversation.peerName)}</div>
@@ -751,8 +717,8 @@ function renderChatWorkspace() {
           </div>
         </div>
         <div class="workspace-header-actions">
-          <button class="header-action-btn" data-action="attach-file" type="button" title="Attach files" ${online ? '' : 'disabled'}>${icon('attach')}</button>
-          <button class="header-action-btn" data-action="attach-folder" type="button" title="Attach folder" ${online ? '' : 'disabled'}>${icon('folder')}</button>
+          <button class="header-action-btn" data-action="attach-file" type="button" title="Attach files">${icon('attach')}</button>
+          <button class="header-action-btn" data-action="attach-folder" type="button" title="Attach folder">${icon('folder')}</button>
         </div>
       </header>
       <div class="chat-layout single-column" data-chat-drop-zone="true">
@@ -762,7 +728,7 @@ function renderChatWorkspace() {
               <div class="thread-empty compact-empty"><p>No messages yet</p></div>
             `}
           </div>
-          ${state.chatDropActive && online ? `<div class="chat-drop-indicator">Drop files or folders to queue</div>` : ''}
+          ${state.chatDropActive ? `<div class="chat-drop-indicator">Drop files or folders to queue</div>` : ''}
           ${state.queuedAttachments.length ? `
             <div class="queued-strip">
               ${state.queuedAttachments.map((item) => `
@@ -770,90 +736,17 @@ function renderChatWorkspace() {
               `).join('')}
             </div>
           ` : ''}
-          <section class="composer-shell ${online ? '' : 'disabled'}">
-            <textarea id="message-input" placeholder="${online ? `Message ${escapeHtml(conversation.peerName)} (Markdown supported)` : `${escapeHtml(conversation.peerName)} is offline`}" ${online ? '' : 'disabled'}>${escapeHtml(draft)}</textarea>
+          <section class="composer-shell">
+            <textarea id="message-input" placeholder="${online ? `Message ${escapeHtml(conversation.peerName)} (Markdown supported)` : `Message ${escapeHtml(conversation.peerName)} - queues until online`}" >${escapeHtml(draft)}</textarea>
             <div class="composer-actions">
-              <div class="queued-summary">${online ? (state.queuedAttachments.length ? `${state.queuedAttachments.length} queued` : 'Ready') : 'Unavailable while offline'}</div>
-              <button class="primary-btn compact-send" data-action="send-message" type="button" ${online ? '' : 'disabled'}>
+              <div class="queued-summary">${state.queuedAttachments.length ? `${state.queuedAttachments.length} queued` : 'Ready'}</div>
+              <button class="primary-btn compact-send" data-action="send-message" type="button">
                 ${icon('send')}
-                <span>Send</span>
+                <span>${online ? 'Send' : 'Queue'}</span>
               </button>
             </div>
-            ${online ? '' : '<div class="composer-offline-note">Messages, files, and folders can only be sent when this peer is online.</div>'}
           </section>
         </section>
-      </div>
-    </section>
-  `;
-}
-
-function getTransferSections() {
-  const incoming = [];
-  const outgoing = [];
-
-  for (const transfer of state.transfers || []) {
-    const direction = transfer.direction || (transfer.kind === 'sync' || transfer.kind === 'incoming-share' ? 'incoming' : 'outgoing');
-    if (direction === 'incoming') incoming.push(transfer);
-    else outgoing.push(transfer);
-  }
-
-  for (const shared of state.sharedFolders || []) {
-    if (outgoing.some((item) => item.id === shared.id)) continue;
-    outgoing.push({
-      id: shared.id,
-      kind: 'share',
-      folderId: shared.id,
-      folderName: shared.name,
-      status: 'shared',
-      percent: 100,
-      resourceType: shared.type,
-      peerName: `${(shared.peers || []).length} peer${(shared.peers || []).length === 1 ? '' : 's'}`,
-      createdAt: shared.sharedAt,
-      updatedAt: shared.sharedAt,
-      direction: 'outgoing',
-      isSharedRecord: true,
-    });
-  }
-
-  incoming.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
-  outgoing.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
-  return { incoming, outgoing };
-}
-
-function renderTransferCard(item) {
-  const isIncoming = (item.direction || (item.kind === 'sync' || item.kind === 'incoming-share' ? 'incoming' : 'outgoing')) === 'incoming';
-  const iconName = item.resourceType === 'folder' ? 'folder' : item.resourceType === 'file' ? 'file' : 'transfers';
-  const label = item.folderName || item.file || 'Transfer';
-  const subtitle = item.peerName || item.status || 'pending';
-  const status = (item.status || 'pending').replace(/-/g, ' ');
-  return `
-    <article class="stack-card">
-      <div class="stack-top">
-        <span class="stack-icon">${icon(iconName)}</span>
-        <strong>${escapeHtml(label)}</strong>
-        <small>${escapeHtml(status)}</small>
-      </div>
-      <small>${escapeHtml(subtitle)}</small>
-      <div class="progress-shell"><div class="progress-fill ${isIncoming ? 'incoming-fill' : 'outgoing-fill'}" style="width:${Math.max(4, item.percent || 0)}%"></div></div>
-      ${item.isSharedRecord ? `<div class="stack-actions horizontal-actions"><button class="inline-action" data-stop-share="${item.id}" type="button" title="Stop sharing">${icon('close')}</button></div>` : ''}
-    </article>
-  `;
-}
-
-function renderTransfersWorkspace() {
-  const sections = getTransferSections();
-  const items = state.activeTransferSection === 'outgoing' ? sections.outgoing : sections.incoming;
-  return `
-    <section class="workspace-shell">
-      <header class="workspace-header simple transfer-header">
-        <strong>Transfers</strong>
-        <div class="section-switch" role="tablist" aria-label="Transfer sections">
-          <button class="section-tab ${state.activeTransferSection === 'incoming' ? 'active' : ''}" data-transfer-section="incoming" type="button">Incoming (${sections.incoming.length})</button>
-          <button class="section-tab ${state.activeTransferSection === 'outgoing' ? 'active' : ''}" data-transfer-section="outgoing" type="button">Outgoing (${sections.outgoing.length})</button>
-        </div>
-      </header>
-      <div class="stack-list">
-        ${items.length ? items.map(renderTransferCard).join('') : `<div class="thread-empty compact-empty"><p>No ${state.activeTransferSection} transfers</p></div>`}
       </div>
     </section>
   `;
@@ -887,19 +780,7 @@ function renderSettingsWorkspace() {
             <button class="secondary-btn" data-action="regenerate-avatar" type="button">Regenerate avatar</button>
           </div>
         </section>
-        <section class="settings-card">
-          <div class="settings-section-head">
-            <strong>Storage</strong>
-            <small>Default location for accepted files and folders</small>
-          </div>
-          <label for="settings-master-folder">Master folder</label>
-          <input id="settings-master-folder" value="${escapeHtml(state.masterFolder || '')}" />
-          <div class="settings-actions split-actions">
-            <button class="secondary-btn" data-action="browse-master-folder" type="button">Browse</button>
-            <button class="secondary-btn" data-action="open-master" type="button">Open</button>
-            <button class="primary-btn" data-action="save-master-folder" type="button">Save folder</button>
-          </div>
-        </section>
+        ${'' /* Storage settings are disabled while accepted shares use a user-picked save path. */}
         <section class="settings-card">
           <div class="settings-section-head">
             <strong>Device</strong>
@@ -910,10 +791,7 @@ function renderSettingsWorkspace() {
               <input id="settings-notification-sound" type="checkbox" ${state.settings.notificationSoundEnabled === false ? '' : 'checked'} />
               <span>Notification sound</span>
             </label>
-            <label class="settings-toggle">
-              <input id="settings-auto-accept" type="checkbox" ${state.settings.autoAcceptTransfers ? 'checked' : ''} />
-              <span>Auto-accept incoming transfers</span>
-            </label>
+            ${'' /* Auto-accept is disabled because accepting a share now requires choosing a save path. */}
             <label class="settings-toggle">
               <input id="settings-auto-update-check" type="checkbox" ${state.settings.autoCheckUpdates === false ? '' : 'checked'} />
               <span>Auto-check for updates</span>
@@ -962,9 +840,14 @@ function bindComposerHandlers() {
   input.addEventListener('input', () => {
     state.messageDrafts[conversation.id] = input.value;
   });
+  input.addEventListener('keydown', async (event) => {
+    if (event.key !== 'Enter' || event.shiftKey) return;
+    event.preventDefault();
+    await sendActiveConversationMessage();
+  });
   input.addEventListener('paste', async (event) => {
     const conversationNow = getActiveConversation();
-    if (!conversationNow || !isPeerOnline(conversationNow.peerId)) return;
+    if (!conversationNow) return;
     const items = Array.from(event.clipboardData?.items || []);
     const imageItem = items.find((item) => item.type && item.type.startsWith('image/'));
     if (!imageItem || !api.savePastedImage) return;
@@ -997,10 +880,7 @@ function renderStage() {
   if (state.activeWorkspace === 'chats') {
     stage.innerHTML = renderChatWorkspace();
     bindComposerHandlers();
-    return;
-  }
-  if (state.activeWorkspace === 'transfers') {
-    stage.innerHTML = renderTransfersWorkspace();
+    scrollMessagesToBottom();
     return;
   }
   stage.innerHTML = renderSettingsWorkspace();
@@ -1057,36 +937,42 @@ function renderWithComposerPreserved(renderFn) {
   }
 }
 
+async function sendActiveConversationMessage() {
+  const input = document.getElementById('message-input');
+  const conversation = getActiveConversation();
+  if (!conversation) return false;
+  const online = isPeerOnline(conversation.peerId);
+
+  const text = input?.value || '';
+  if (!text.trim() && state.queuedAttachments.length === 0) {
+    toast('Nothing to send', 'error');
+    return false;
+  }
+
+  await api.sendMessage({
+    peerId: conversation.peerId,
+    text,
+    attachments: state.queuedAttachments.map((item) => item.path),
+  });
+  state.messageDrafts[conversation.id] = '';
+  state.queuedAttachments = [];
+  await refreshSharedState();
+  state.conversations = await api.getConversations();
+  await loadConversationMessages();
+  renderAll();
+  toast(online ? 'Sent' : 'Queued until peer is online', 'success');
+  return true;
+}
+
 async function refreshSharedState() {
-  const [sharedFolders, receivedFolders, transfers, syncProgress, inbox] = await Promise.all([
+  const [sharedFolders, receivedFolders, inbox] = await Promise.all([
     api.getSharedFolders(),
     api.getReceivedFolders(),
-    api.getTransfers(),
-    api.getSyncProgress(),
     api.getInboxItems(),
   ]);
   state.sharedFolders = sharedFolders;
   state.receivedFolders = receivedFolders;
-  state.transfers = transfers;
-  state.syncProgress = syncProgress;
   state.inbox = inbox;
-}
-
-async function autoAcceptPendingRequests() {
-  if (!state.settings.autoAcceptTransfers) return;
-  const pending = state.inbox.filter((item) => item.status === 'pending' && item.request);
-  for (const item of pending) {
-    if (autoAcceptInFlight.has(item.id)) continue;
-    autoAcceptInFlight.add(item.id);
-    try {
-      await api.acceptAccess(item.request);
-      toast(`Auto-accepted ${item.folderName}`, 'success');
-    } catch (error) {
-      toast(`Auto-accept failed for ${item.folderName}`, 'error');
-    } finally {
-      autoAcceptInFlight.delete(item.id);
-    }
-  }
 }
 
 async function openWorkspace(workspace) {
@@ -1148,23 +1034,9 @@ document.body.addEventListener('click', async (event) => {
     notificationButton.classList.remove('active');
   }
 
-  if (event.target.closest('[data-action="open-master"]')) {
-    await api.openMasterFolder();
-    return;
-  }
-
-  if (event.target.closest('[data-action="manual-sync"]')) {
-    await api.forceSync();
-    toast('Sync started', 'success');
-    return;
-  }
-
   if (event.target.closest('[data-action="attach-file"]')) {
     const conversation = getActiveConversation();
-    if (!conversation || !isPeerOnline(conversation.peerId)) {
-      toast('Peer is offline', 'error');
-      return;
-    }
+    if (!conversation) return;
     const files = await api.pickFile();
     if (files.length) {
       await queueAttachmentPaths(files);
@@ -1175,10 +1047,7 @@ document.body.addEventListener('click', async (event) => {
 
   if (event.target.closest('[data-action="attach-folder"]')) {
     const conversation = getActiveConversation();
-    if (!conversation || !isPeerOnline(conversation.peerId)) {
-      toast('Peer is offline', 'error');
-      return;
-    }
+    if (!conversation) return;
     const folder = await api.pickFolder();
     if (folder) {
       await queueAttachmentPaths([folder]);
@@ -1188,32 +1057,7 @@ document.body.addEventListener('click', async (event) => {
   }
 
   if (event.target.closest('[data-action="send-message"]')) {
-    const input = document.getElementById('message-input');
-    const conversation = getActiveConversation();
-    if (!conversation) return;
-    if (!isPeerOnline(conversation.peerId)) {
-      toast('Peer is offline', 'error');
-      return;
-    }
-
-    const text = input?.value || '';
-    if (!text.trim() && state.queuedAttachments.length === 0) {
-      toast('Nothing to send', 'error');
-      return;
-    }
-
-    await api.sendMessage({
-      peerId: conversation.peerId,
-      text,
-      attachments: state.queuedAttachments.map((item) => item.path),
-    });
-    state.messageDrafts[conversation.id] = '';
-    state.queuedAttachments = [];
-    await refreshSharedState();
-    state.conversations = await api.getConversations();
-    await loadConversationMessages();
-    renderAll();
-    toast('Sent', 'success');
+    await sendActiveConversationMessage();
     return;
   }
 
@@ -1221,14 +1065,12 @@ document.body.addEventListener('click', async (event) => {
     const name = document.getElementById('settings-name')?.value?.trim();
     const avatarStyle = document.getElementById('settings-avatar-style')?.value || state.settings.avatarStyle;
     const soundEnabled = !!document.getElementById('settings-notification-sound')?.checked;
-    const autoAcceptTransfers = !!document.getElementById('settings-auto-accept')?.checked;
     const autoCheckUpdates = !!document.getElementById('settings-auto-update-check')?.checked;
     const autoDownloadUpdates = !!document.getElementById('settings-auto-update-download')?.checked;
     if (!name) return;
     await api.setSettings({
       avatarStyle,
       notificationSoundEnabled: soundEnabled,
-      autoAcceptTransfers,
       autoCheckUpdates,
       autoDownloadUpdates,
     });
@@ -1246,7 +1088,6 @@ document.body.addEventListener('click', async (event) => {
       avatarStyle,
       avatarSeed: generateAvatarSeed(),
       notificationSoundEnabled: !!document.getElementById('settings-notification-sound')?.checked,
-      autoAcceptTransfers: !!document.getElementById('settings-auto-accept')?.checked,
       autoCheckUpdates: !!document.getElementById('settings-auto-update-check')?.checked,
       autoDownloadUpdates: !!document.getElementById('settings-auto-update-download')?.checked,
     });
@@ -1254,30 +1095,6 @@ document.body.addEventListener('click', async (event) => {
     state.currentUser = await api.getUserInfo();
     renderAll();
     toast('Avatar updated', 'success');
-    return;
-  }
-
-  if (event.target.closest('[data-action="browse-master-folder"]')) {
-    const folder = await api.pickMasterFolder();
-    if (!folder) return;
-    const input = document.getElementById('settings-master-folder');
-    if (input) input.value = folder;
-    return;
-  }
-
-  if (event.target.closest('[data-action="save-master-folder"]')) {
-    const folder = document.getElementById('settings-master-folder')?.value?.trim();
-    if (!folder) return;
-    state.masterFolder = await api.setMasterFolder(folder);
-    renderAll();
-    toast('Folder updated', 'success');
-    return;
-  }
-
-  const transferSectionButton = event.target.closest('[data-transfer-section]');
-  if (transferSectionButton) {
-    state.activeTransferSection = transferSectionButton.dataset.transferSection === 'outgoing' ? 'outgoing' : 'incoming';
-    renderStage();
     return;
   }
 
@@ -1328,7 +1145,11 @@ document.body.addEventListener('click', async (event) => {
   if (acceptButton) {
     const item = state.inbox.find((entry) => entry.id === acceptButton.dataset.acceptRequest);
     if (!item) return;
-    await api.acceptAccess(item.request);
+    const accepted = await api.acceptAccess(item.request);
+    if (!accepted) {
+      toast('Save cancelled', 'info');
+      return;
+    }
     await refreshSharedState();
     state.conversations = await api.getConversations();
     await loadConversationMessages();
@@ -1365,7 +1186,7 @@ function isFileDrag(event) {
 stage.addEventListener('dragover', (event) => {
   if (state.activeWorkspace !== 'chats') return;
   const conversation = getActiveConversation();
-  if (!conversation || !isPeerOnline(conversation.peerId)) return;
+  if (!conversation) return;
   if (!isFileDrag(event)) return;
   event.preventDefault();
 });
@@ -1373,7 +1194,7 @@ stage.addEventListener('dragover', (event) => {
 stage.addEventListener('dragenter', (event) => {
   if (state.activeWorkspace !== 'chats') return;
   const conversation = getActiveConversation();
-  if (!conversation || !isPeerOnline(conversation.peerId)) return;
+  if (!conversation) return;
   if (!isFileDrag(event)) return;
   event.preventDefault();
   if (!state.chatDropActive) {
@@ -1393,7 +1214,7 @@ stage.addEventListener('drop', async (event) => {
   if (state.activeWorkspace !== 'chats') return;
   const conversation = getActiveConversation();
   state.chatDropActive = false;
-  if (!conversation || !isPeerOnline(conversation.peerId)) {
+  if (!conversation) {
     renderStage();
     return;
   }
@@ -1420,14 +1241,6 @@ document.body.addEventListener('change', async (event) => {
     await api.setSettings({ notificationSoundEnabled: enabled });
     state.settings = await api.getSettings();
     toast(`Notification sound ${enabled ? 'enabled' : 'disabled'}`, 'info');
-    return;
-  }
-  if (event.target.id === 'settings-auto-accept') {
-    const enabled = !!event.target.checked;
-    await api.setSettings({ autoAcceptTransfers: enabled });
-    state.settings = await api.getSettings();
-    toast(`Auto-accept ${enabled ? 'enabled' : 'disabled'}`, 'info');
-    if (enabled) await autoAcceptPendingRequests();
     return;
   }
   if (event.target.id === 'settings-auto-update-check') {
@@ -1478,44 +1291,23 @@ api.on('message-received', async () => {
   renderWithComposerPreserved(() => renderConversationShell());
 });
 
-api.on('transfer-updated', async (transfers) => {
-  state.transfers = Array.isArray(transfers) ? transfers : await api.getTransfers();
-  state.syncProgress = await api.getSyncProgress();
-  renderRailAndNotifications();
-  if (state.activeWorkspace === 'home' || state.activeWorkspace === 'transfers') {
-    renderStage();
-  }
-});
-
 api.on('inbox-updated', async (inbox) => {
   state.inbox = inbox;
   renderRailAndNotifications();
   if (state.activeWorkspace === 'home') renderStage();
-  await autoAcceptPendingRequests();
 });
 
 api.on('access-accepted', async () => {
   await refreshSharedState();
   state.conversations = await api.getConversations();
   renderRailAndNotifications();
-  if (state.activeWorkspace === 'home' || state.activeWorkspace === 'transfers') renderStage();
+  if (state.activeWorkspace === 'home') renderStage();
 });
 
 api.on('access-rejected', async () => {
   state.conversations = await api.getConversations();
   renderRailAndNotifications();
-  if (state.activeWorkspace === 'home' || state.activeWorkspace === 'transfers') renderStage();
-});
-
-api.on('sync-progress', async (progress) => {
-  state.syncProgress[progress.folderId] = progress;
-  if (state.notificationsOpen) {
-    renderNotificationPopup();
-    notificationButton.classList.toggle('active', state.notificationsOpen);
-  }
-  if (state.activeWorkspace === 'home' || state.activeWorkspace === 'transfers') {
-    renderStage();
-  }
+  if (state.activeWorkspace === 'home') renderStage();
 });
 
 api.on('new-notification', (notification) => {
